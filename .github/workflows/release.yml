@@ -41,7 +41,7 @@ jobs:
           key: venv-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-release-${{ hashFiles('**/pyproject.toml', '**/poetry.lock') }}
 
       - name: Install dependencies
-        run: poetry install --no-interaction
+        run: poetry install --only main --no-interaction
 
       - name: Build distributions
         run: poetry build

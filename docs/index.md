@@ -30,6 +30,13 @@ from terok_dbus import create_notifier
 
 async def main():
     notifier = await create_notifier(app_name="terok")
+    action_received = asyncio.Event()
+
+    def on_action(nid, key):
+        print(f"{nid}: {key}")
+        action_received.set()
+
+    notifier.on_action(on_action)
 
     nid = await notifier.notify(
         "Clearance request",
@@ -37,7 +44,7 @@ async def main():
         actions={"allow": "Allow", "deny": "Deny"},
     )
 
-    notifier.on_action(lambda nid, key: print(f"{nid}: {key}"))
+    await action_received.wait()
     await notifier.close()
 
 asyncio.run(main())

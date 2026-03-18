@@ -44,8 +44,8 @@ make docs             # serve documentation locally
 make test-unit    # runs tests/ with coverage
 ```
 
-Unit tests mock all D-Bus calls. No desktop session or notification daemon
-required. Generated reports go under `reports/`.
+The current test suite does not require a desktop session or notification
+daemon. Generated reports go under `reports/`.
 
 ## Architecture
 
