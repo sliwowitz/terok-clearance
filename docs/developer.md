@@ -51,7 +51,7 @@ daemon. Generated reports go under `reports/`.
 
 ### Module structure
 
-```
+```text
 _constants    — D-Bus bus name, object path, interface, close reason codes
 _protocol     — Notifier Protocol (PEP 544, runtime_checkable)
 _null         — NullNotifier (no-op fallback)
@@ -62,7 +62,7 @@ __init__      — public API + create_notifier() factory
 
 ### Dependency rules (tach.toml)
 
-```
+```text
 _constants, _protocol, _null → no dependencies
 _notifier → depends on _constants only
 _cli → depends on terok_dbus (public API)
