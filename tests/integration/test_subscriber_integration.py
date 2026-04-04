@@ -34,9 +34,14 @@ class MockShield1(ServiceInterface):
     @signal()
     def connection_blocked(
         self,
-    ) -> "ssqqss":
+        container: "s",
+        dest: "s",
+        port: "q",
+        proto: "q",
+        domain: "s",
+        request_id: "s",
+    ) -> None:
         """Emit a ConnectionBlocked signal."""
-        ...
 
     @method()
     def verdict(self, request_id: "s", action: "s") -> "b":
@@ -45,9 +50,15 @@ class MockShield1(ServiceInterface):
         return True
 
     @signal()
-    def verdict_applied(self) -> "sssab":
+    def verdict_applied(
+        self,
+        container: "s",
+        dest: "s",
+        request_id: "s",
+        action: "s",
+        ok: "b",
+    ) -> None:
         """Emit a VerdictApplied signal."""
-        ...
 
 
 class MockClearance1(ServiceInterface):
@@ -58,9 +69,16 @@ class MockClearance1(ServiceInterface):
         self._resolve_log: list[tuple[str, str]] = []
 
     @signal()
-    def request_received(self) -> "ssssqs":
+    def request_received(
+        self,
+        request_id: "s",
+        project: "s",
+        task: "s",
+        dest: "s",
+        port: "q",
+        reason: "s",
+    ) -> None:
         """Emit a RequestReceived signal."""
-        ...
 
     @method()
     def resolve(self, request_id: "s", action: "s") -> "b":
@@ -69,9 +87,13 @@ class MockClearance1(ServiceInterface):
         return True
 
     @signal()
-    def request_resolved(self) -> "ssas":
+    def request_resolved(
+        self,
+        request_id: "s",
+        action: "s",
+        ips: "as",
+    ) -> None:
         """Emit a RequestResolved signal."""
-        ...
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────
