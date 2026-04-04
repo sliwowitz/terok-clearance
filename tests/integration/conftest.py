@@ -19,7 +19,7 @@ import shutil
 import signal
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 
@@ -115,7 +115,7 @@ def notification_daemon(dbus_session: str) -> Iterator[None]:
 
 
 @pytest.fixture
-async def notifier(dbus_session: str, notification_daemon: None) -> Iterator[Notifier]:
+async def notifier(dbus_session: str, notification_daemon: None) -> AsyncIterator[Notifier]:
     """Provide a connected ``DbusNotifier`` backed by the test bus.
 
     Disconnects automatically after the test.
