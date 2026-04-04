@@ -7,16 +7,13 @@ Environment requirements are expressed via pytest markers:
 
 - ``needs_dbus``: a D-Bus session bus must be reachable.
 - ``needs_notification_daemon``: a notification daemon must be
-  running on the session bus (existing or started by the fixture).
+  running on the session bus.
 
-The ``dbus_session`` fixture reuses the existing session bus or
-launches a private one via ``dbus-daemon``.  The ``notification_daemon``
-fixture detects an already-running daemon before attempting to start
-dunst — so tests work on a developer desktop (existing daemon) and in
-CI/matrix containers (dunst started by fixture) alike.
+The ``dbus_session`` fixture always launches a **private** bus so that
+test notifications never appear in the developer's notification bar.
+The ``notification_daemon`` fixture starts dunst on that private bus.
 """
 
-import asyncio
 import os
 import shutil
 import signal
@@ -27,7 +24,6 @@ from collections.abc import AsyncIterator, Iterator
 import pytest
 
 from terok_dbus import DbusNotifier, Notifier, create_notifier
-from terok_dbus._constants import BUS_NAME, OBJECT_PATH
 
 
 def _has(binary: str) -> bool:
@@ -35,43 +31,18 @@ def _has(binary: str) -> bool:
     return shutil.which(binary) is not None
 
 
-def _daemon_on_bus(bus_address: str) -> bool:
-    """Return True if a notification daemon is reachable on the bus."""
-    from dbus_fast.aio import MessageBus
-
-    async def _probe() -> bool:
-        try:
-            bus = await MessageBus(bus_address=bus_address).connect()
-            try:
-                await bus.introspect(BUS_NAME, OBJECT_PATH)
-                return True
-            except Exception:
-                return False
-            finally:
-                bus.disconnect()
-        except Exception:
-            return False
-
-    return asyncio.get_event_loop().run_until_complete(_probe())
-
-
 @pytest.fixture(scope="session")
 def dbus_session() -> Iterator[str]:
-    """Provide a D-Bus session bus address for the test run.
+    """Launch a private D-Bus session bus for the test run.
 
-    Reuses ``DBUS_SESSION_BUS_ADDRESS`` when set, otherwise launches
-    a private ``dbus-daemon --session`` via ``dbus-launch``.
+    Always starts a fresh bus — even when the user's desktop session
+    has one — so that test notifications stay invisible.
 
     Yields:
-        The bus address string.
+        The private bus address string.
     """
-    existing = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
-    if existing:
-        yield existing
-        return
-
     if not _has("dbus-launch"):
-        pytest.skip("dbus-launch not installed and DBUS_SESSION_BUS_ADDRESS not set")
+        pytest.skip("dbus-launch not installed")
 
     proc = subprocess.run(
         ["dbus-launch", "--sh-syntax"],
@@ -94,11 +65,18 @@ def dbus_session() -> Iterator[str]:
     if not bus_address:
         pytest.skip(f"dbus-launch did not provide DBUS_SESSION_BUS_ADDRESS: {proc.stdout!r}")
 
+    # Override the env for the entire test session so create_notifier()
+    # connects to the private bus, not the user's desktop session.
+    original = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
     os.environ["DBUS_SESSION_BUS_ADDRESS"] = bus_address
 
     yield bus_address
 
-    os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)
+    if original is not None:
+        os.environ["DBUS_SESSION_BUS_ADDRESS"] = original
+    else:
+        os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)
+
     if bus_pid:
         try:
             os.kill(int(bus_pid), signal.SIGTERM)
@@ -108,20 +86,13 @@ def dbus_session() -> Iterator[str]:
 
 @pytest.fixture(scope="session")
 def notification_daemon(dbus_session: str) -> Iterator[None]:
-    """Ensure a notification daemon is available on the session bus.
+    """Start dunst on the private test bus.
 
-    If one is already running (desktop session), yield immediately.
-    Otherwise start dunst and yield once it registers on the bus.
-    Skips if neither is available.
+    Skips if dunst is not installed.
     """
-    if _daemon_on_bus(dbus_session):
-        yield
-        return
-
     if not _has("dunst"):
         pytest.skip(
-            "no notification daemon on bus and dunst not installed; "
-            "install dunst or run from a desktop session"
+            "dunst not installed; install dunst or run via 'make test-matrix' for full coverage"
         )
 
     proc = subprocess.Popen(
@@ -146,7 +117,7 @@ def notification_daemon(dbus_session: str) -> Iterator[None]:
 
 @pytest.fixture
 async def notifier(dbus_session: str, notification_daemon: None) -> AsyncIterator[Notifier]:
-    """Provide a connected ``DbusNotifier`` backed by the test bus.
+    """Provide a connected ``DbusNotifier`` backed by the private test bus.
 
     Disconnects automatically after the test.
     """
