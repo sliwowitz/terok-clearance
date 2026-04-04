@@ -38,7 +38,7 @@ async def create_notifier(app_name: str = "terok") -> Notifier:
     notifier = DbusNotifier(app_name)
     try:
         await notifier._connect()
-    except (OSError, DBusError) as exc:
+    except (OSError, DBusError, ValueError) as exc:
         _log.debug("D-Bus session bus unavailable, falling back to NullNotifier: %s", exc)
         return NullNotifier()
     return notifier
