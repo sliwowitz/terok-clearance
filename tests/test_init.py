@@ -42,3 +42,11 @@ class TestCreateNotifier:
         with patch("terok_dbus._notifier.MessageBus", return_value=mock_bus):
             notifier = await create_notifier()
             assert isinstance(notifier, NullNotifier)
+
+    async def test_returns_null_notifier_on_invalid_address(self):
+        with patch(
+            "terok_dbus._notifier.MessageBus",
+            side_effect=ValueError("could not open dbus info file"),
+        ):
+            notifier = await create_notifier()
+            assert isinstance(notifier, NullNotifier)
