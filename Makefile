@@ -1,8 +1,9 @@
-.PHONY: all lint format test test-unit ruff-report bandit-report sonar-inputs tach security docstrings complexity deadcode reuse check install install-dev docs docs-build clean spdx
+.PHONY: all lint format test test-unit test-integration test-matrix ruff-report bandit-report sonar-inputs tach security docstrings complexity deadcode reuse check install install-dev docs docs-build clean spdx
 
 REPORTS_DIR ?= reports
 COVERAGE_XML ?= $(REPORTS_DIR)/coverage.xml
 UNIT_JUNIT_XML ?= $(REPORTS_DIR)/unit.junit.xml
+INTEGRATION_JUNIT_XML ?= $(REPORTS_DIR)/integration.junit.xml
 RUFF_REPORT ?= $(REPORTS_DIR)/ruff-report.json
 BANDIT_REPORT ?= $(REPORTS_DIR)/bandit-report.json
 
@@ -22,11 +23,20 @@ format:
 	poetry run ruff check --fix .
 	poetry run ruff format .
 
-# Run tests with coverage
+# Run unit tests with coverage (excludes integration tests)
 test-unit:
 	mkdir -p $(REPORTS_DIR)
-	poetry run pytest tests/ --cov=terok_dbus --cov-report=term-missing --cov-report=xml:$(COVERAGE_XML) --junitxml=$(UNIT_JUNIT_XML) -o junit_family=legacy
+	poetry run pytest tests/ --ignore=tests/integration --cov=terok_dbus --cov-report=term-missing --cov-report=xml:$(COVERAGE_XML) --junitxml=$(UNIT_JUNIT_XML) -o junit_family=legacy
 	@echo "NOTE: Target 95%+ test coverage."
+
+# Run integration tests (requires D-Bus session bus + dunst)
+test-integration:
+	mkdir -p $(REPORTS_DIR)
+	poetry run pytest tests/integration/ -v --tb=short --junitxml=$(INTEGRATION_JUNIT_XML) -o junit_family=legacy
+
+# Run multi-distro test matrix (requires podman on host)
+test-matrix:
+	./tests/containers/run-matrix.sh $(DISTROS)
 
 # Write Ruff's JSON report without failing on findings.
 ruff-report:

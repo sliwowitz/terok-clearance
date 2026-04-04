@@ -39,6 +39,7 @@ tach = "^0.34.0"
 pytest = ">=7.0"
 pytest-cov = ">=4.0"
 pytest-asyncio = ">=0.21.0"
+python-dbusmock = ">=0.32"
 
 [tool.poetry.group.docs.dependencies]
 mkdocs = ">=1.5,<2"
@@ -61,6 +62,7 @@ addopts = "-v --tb=short"
 asyncio_mode = "auto"
 markers = [
   "integration: requires a running D-Bus session bus",
+  "needs_dbus: requires a D-Bus session bus on DBUS_SESSION_BUS_ADDRESS",
 ]
 
 [tool.ruff]

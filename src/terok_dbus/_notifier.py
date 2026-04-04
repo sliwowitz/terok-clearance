@@ -37,8 +37,10 @@ class DbusNotifier:
             introspection = await bus.introspect(BUS_NAME, OBJECT_PATH)
             proxy = bus.get_proxy_object(BUS_NAME, OBJECT_PATH, introspection)
             iface = proxy.get_interface(INTERFACE_NAME)
-            iface.on_action_invoked(self._handle_action)
-            iface.on_notification_closed(self._handle_closed)
+            if hasattr(iface, "on_action_invoked"):
+                iface.on_action_invoked(self._handle_action)
+            if hasattr(iface, "on_notification_closed"):
+                iface.on_notification_closed(self._handle_closed)
         except Exception:
             bus.disconnect()
             raise
@@ -119,8 +121,10 @@ class DbusNotifier:
     async def disconnect(self) -> None:
         """Tear down the session-bus connection."""
         if self._interface is not None:
-            self._interface.off_action_invoked(self._handle_action)
-            self._interface.off_notification_closed(self._handle_closed)
+            if hasattr(self._interface, "off_action_invoked"):
+                self._interface.off_action_invoked(self._handle_action)
+            if hasattr(self._interface, "off_notification_closed"):
+                self._interface.off_notification_closed(self._handle_closed)
         if self._bus is not None:
             self._bus.disconnect()
         self._bus = None

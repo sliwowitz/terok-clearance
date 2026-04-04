@@ -48,3 +48,7 @@ def main() -> None:
         asyncio.run(_async_main(args))
     except KeyboardInterrupt:
         sys.exit(130)
+
+
+if __name__ == "__main__":
+    main()
