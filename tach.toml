@@ -14,10 +14,45 @@ ignore_type_checking_imports = true
 
 # ── Module Boundaries ───────────────────────────────────────────────
 #
-# Flat structure: modules are added as they are implemented.
-# For now, only the package root is declared.
+# Leaf modules (no dependencies):
+#   _constants, _protocol, _null
+#
+# Internal modules:
+#   _notifier → _constants
+#
+# CLI:
+#   _cli → terok_dbus (public API)
 
-# Package root — public API
+# Package root — public API (re-exports from internal modules)
 [[modules]]
 path = "terok_dbus"
+depends_on = [
+    { path = "terok_dbus._notifier" },
+    { path = "terok_dbus._null" },
+    { path = "terok_dbus._protocol" },
+]
+
+# D-Bus constants and close-reason codes
+[[modules]]
+path = "terok_dbus._constants"
 depends_on = []
+
+# Notifier protocol definition
+[[modules]]
+path = "terok_dbus._protocol"
+depends_on = []
+
+# NullNotifier (headless fallback)
+[[modules]]
+path = "terok_dbus._null"
+depends_on = []
+
+# DbusNotifier (dbus-fast implementation)
+[[modules]]
+path = "terok_dbus._notifier"
+depends_on = [{ path = "terok_dbus._constants" }]
+
+# CLI entry point
+[[modules]]
+path = "terok_dbus._cli"
+depends_on = [{ path = "terok_dbus" }]

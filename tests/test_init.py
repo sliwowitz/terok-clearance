@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 Jiri Vyskocil
+# SPDX-License-Identifier: Apache-2.0
+
+"""Tests for the public API surface of terok_dbus."""
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import terok_dbus
+from terok_dbus import DbusNotifier, Notifier, NullNotifier, create_notifier
+
+
+class TestPublicApi:
+    """Verify that __all__ matches the actual public API."""
+
+    def test_all_exports(self):
+        expected = {"DbusNotifier", "NullNotifier", "Notifier", "create_notifier"}
+        assert set(terok_dbus.__all__) == expected
+
+    def test_notifier_is_protocol(self):
+        assert isinstance(NullNotifier(), Notifier)
+
+
+class TestCreateNotifier:
+    """Factory function tests."""
+
+    async def test_returns_dbus_notifier_when_bus_available(self):
+        mock_bus = MagicMock()
+        mock_bus.connect = AsyncMock(return_value=mock_bus)
+        mock_bus.introspect = AsyncMock(return_value=MagicMock())
+        proxy = MagicMock()
+        proxy.get_interface.return_value = MagicMock()
+        mock_bus.get_proxy_object.return_value = proxy
+
+        with patch("terok_dbus._notifier.MessageBus", return_value=mock_bus):
+            notifier = await create_notifier("test")
+            assert isinstance(notifier, DbusNotifier)
+
+    async def test_returns_null_notifier_on_connection_failure(self):
+        mock_bus = MagicMock()
+        mock_bus.connect = AsyncMock(side_effect=OSError("no bus"))
+
+        with patch("terok_dbus._notifier.MessageBus", return_value=mock_bus):
+            notifier = await create_notifier()
+            assert isinstance(notifier, NullNotifier)
