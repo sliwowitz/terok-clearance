@@ -50,8 +50,8 @@ class TestDbusNotifierConnect:
             notifier = DbusNotifier()
             await notifier._connect()
             iface = mock_bus.get_proxy_object.return_value.get_interface.return_value
-            iface.on_action_invoked.assert_called_once()
-            iface.on_notification_closed.assert_called_once()
+            iface.on_action_invoked.assert_called_once_with(notifier._handle_action)
+            iface.on_notification_closed.assert_called_once_with(notifier._handle_closed)
 
     async def test_disconnect_clears_state(self, mock_bus: MagicMock):
         with patch("terok_dbus._notifier.MessageBus", return_value=mock_bus):
