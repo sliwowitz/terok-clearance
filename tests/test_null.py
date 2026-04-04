@@ -30,6 +30,15 @@ class TestNullNotifier:
     async def test_notify_with_timeout(self, null: NullNotifier):
         assert await null.notify("t", timeout_ms=5000) == 0
 
+    async def test_notify_with_hints_replaces_id_app_icon(self, null: NullNotifier):
+        result = await null.notify(
+            "t",
+            hints={"urgency": 2},
+            replaces_id=42,
+            app_icon="dialog-warning",
+        )
+        assert result == 0
+
     async def test_on_action_is_noop(self, null: NullNotifier):
         await null.on_action(1, lambda _: None)  # should not raise
 

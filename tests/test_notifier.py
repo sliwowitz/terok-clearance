@@ -102,6 +102,22 @@ class TestDbusNotifierNotify:
                 5000,
             )
 
+    async def test_notify_passes_hints_replaces_id_app_icon(self, mock_bus: MagicMock):
+        with patch("terok_dbus._notifier.MessageBus", return_value=mock_bus):
+            notifier = DbusNotifier("myapp")
+            hints = {"urgency": "mock_variant", "resident": "mock_bool"}
+            await notifier.notify(
+                "Title",
+                replaces_id=42,
+                app_icon="dialog-warning",
+                hints=hints,
+            )
+            iface = mock_bus.get_proxy_object.return_value.get_interface.return_value
+            call_args = iface.call_notify.call_args[0]
+            assert call_args[1] == 42  # replaces_id
+            assert call_args[2] == "dialog-warning"  # app_icon
+            assert call_args[6] == {"urgency": "mock_variant", "resident": "mock_bool"}
+
     async def test_notify_flattens_actions(self, mock_bus: MagicMock):
         with patch("terok_dbus._notifier.MessageBus", return_value=mock_bus):
             notifier = DbusNotifier()

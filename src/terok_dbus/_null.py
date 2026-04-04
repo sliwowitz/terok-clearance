@@ -3,7 +3,8 @@
 
 """No-op notifier for headless environments without a D-Bus session bus."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 
 class NullNotifier:
@@ -19,6 +20,9 @@ class NullNotifier:
         *,
         actions: Sequence[tuple[str, str]] = (),
         timeout_ms: int = -1,
+        hints: Mapping[str, Any] | None = None,
+        replaces_id: int = 0,
+        app_icon: str = "",
     ) -> int:
         """Accept and discard a notification, returning ``0``."""
         return 0

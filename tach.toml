@@ -27,9 +27,11 @@ ignore_type_checking_imports = true
 [[modules]]
 path = "terok_dbus"
 depends_on = [
+    { path = "terok_dbus._interfaces" },
     { path = "terok_dbus._notifier" },
     { path = "terok_dbus._null" },
     { path = "terok_dbus._protocol" },
+    { path = "terok_dbus._subscriber" },
 ]
 
 # D-Bus constants and close-reason codes
@@ -42,6 +44,11 @@ depends_on = []
 path = "terok_dbus._protocol"
 depends_on = []
 
+# Shield1 / Clearance1 interface definitions
+[[modules]]
+path = "terok_dbus._interfaces"
+depends_on = []
+
 # NullNotifier (headless fallback)
 [[modules]]
 path = "terok_dbus._null"
@@ -51,6 +58,11 @@ depends_on = []
 [[modules]]
 path = "terok_dbus._notifier"
 depends_on = [{ path = "terok_dbus._constants" }]
+
+# Event subscriber (Shield1 + Clearance1 signal bridge)
+[[modules]]
+path = "terok_dbus._subscriber"
+depends_on = [{ path = "terok_dbus._interfaces" }]
 
 # CLI entry point
 [[modules]]

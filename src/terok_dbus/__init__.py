@@ -7,15 +7,35 @@ import logging
 
 from dbus_fast import DBusError
 
+from terok_dbus._interfaces import (
+    CLEARANCE_BUS_NAME,
+    CLEARANCE_INTERFACE_NAME,
+    CLEARANCE_OBJECT_PATH,
+    CLEARANCE_XML,
+    SHIELD_BUS_NAME,
+    SHIELD_INTERFACE_NAME,
+    SHIELD_OBJECT_PATH,
+    SHIELD_XML,
+)
 from terok_dbus._notifier import DbusNotifier
 from terok_dbus._null import NullNotifier
 from terok_dbus._protocol import Notifier
+from terok_dbus._subscriber import EventSubscriber
 
 __all__ = [
     "DbusNotifier",
+    "EventSubscriber",
     "NullNotifier",
     "Notifier",
     "create_notifier",
+    "CLEARANCE_BUS_NAME",
+    "CLEARANCE_INTERFACE_NAME",
+    "CLEARANCE_OBJECT_PATH",
+    "CLEARANCE_XML",
+    "SHIELD_BUS_NAME",
+    "SHIELD_INTERFACE_NAME",
+    "SHIELD_OBJECT_PATH",
+    "SHIELD_XML",
 ]
 
 __version__ = "0.0.0"

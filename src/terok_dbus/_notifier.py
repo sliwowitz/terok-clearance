@@ -4,7 +4,8 @@
 """Desktop notifier backed by dbus-fast and the freedesktop Notifications spec."""
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 from dbus_fast.aio import MessageBus
 
@@ -63,6 +64,9 @@ class DbusNotifier:
         *,
         actions: Sequence[tuple[str, str]] = (),
         timeout_ms: int = -1,
+        hints: Mapping[str, Any] | None = None,
+        replaces_id: int = 0,
+        app_icon: str = "",
     ) -> int:
         """Send a desktop notification.
 
@@ -71,6 +75,9 @@ class DbusNotifier:
             body: Optional body text.
             actions: ``(action_id, label)`` pairs rendered as buttons.
             timeout_ms: Expiration hint in milliseconds (``-1`` = server default).
+            hints: Freedesktop hint dict (values should be ``dbus_fast.Variant``).
+            replaces_id: Replace an existing notification in-place.
+            app_icon: Icon name or ``file:///`` URI.
 
         Returns:
             Server-assigned notification ID.
@@ -86,12 +93,12 @@ class DbusNotifier:
 
         return await self._interface.call_notify(  # type: ignore[union-attr]
             self._app_name,
-            0,  # replaces_id
-            "",  # app_icon
+            replaces_id,
+            app_icon,
             summary,
             body,
             actions_flat,
-            {},  # hints
+            dict(hints) if hints is not None else {},
             timeout_ms,
         )
 

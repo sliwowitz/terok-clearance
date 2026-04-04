@@ -13,7 +13,21 @@ class TestPublicApi:
     """Verify that __all__ matches the actual public API."""
 
     def test_all_exports(self):
-        expected = {"DbusNotifier", "NullNotifier", "Notifier", "create_notifier"}
+        expected = {
+            "DbusNotifier",
+            "EventSubscriber",
+            "NullNotifier",
+            "Notifier",
+            "create_notifier",
+            "CLEARANCE_BUS_NAME",
+            "CLEARANCE_INTERFACE_NAME",
+            "CLEARANCE_OBJECT_PATH",
+            "CLEARANCE_XML",
+            "SHIELD_BUS_NAME",
+            "SHIELD_INTERFACE_NAME",
+            "SHIELD_OBJECT_PATH",
+            "SHIELD_XML",
+        }
         assert set(terok_dbus.__all__) == expected
 
     def test_notifier_is_protocol(self):

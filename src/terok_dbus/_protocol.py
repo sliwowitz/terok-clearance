@@ -3,8 +3,8 @@
 
 """PEP 544 protocol defining the Notifier interface."""
 
-from collections.abc import Callable, Sequence
-from typing import Protocol, runtime_checkable
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -23,6 +23,9 @@ class Notifier(Protocol):
         *,
         actions: Sequence[tuple[str, str]] = (),
         timeout_ms: int = -1,
+        hints: Mapping[str, Any] | None = None,
+        replaces_id: int = 0,
+        app_icon: str = "",
     ) -> int:
         """Send a desktop notification.
 
@@ -31,6 +34,10 @@ class Notifier(Protocol):
             body: Optional body text.
             actions: ``(action_id, label)`` pairs rendered as buttons.
             timeout_ms: Expiration hint in milliseconds (``-1`` = server default).
+            hints: Freedesktop hint dict (values are ``dbus_fast.Variant`` for
+                ``DbusNotifier``, ignored by ``NullNotifier``).
+            replaces_id: Replace an existing notification in-place.
+            app_icon: Icon name or ``file:///`` URI.
 
         Returns:
             Server-assigned notification ID (``0`` for null implementations).
