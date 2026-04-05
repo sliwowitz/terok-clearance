@@ -36,7 +36,7 @@ class TestHeadlessFallback:
         """terok-dbus-notify prints '0' and exits 0 when bus is absent."""
         env = {k: v for k, v in __import__("os").environ.items() if k != "DBUS_SESSION_BUS_ADDRESS"}
         result = subprocess.run(
-            [sys.executable, "-m", "terok_dbus._cli", "Headless", "Test"],
+            [sys.executable, "-m", "terok_dbus._cli", "notify", "Headless", "Test"],
             capture_output=True,
             text=True,
             timeout=10,
