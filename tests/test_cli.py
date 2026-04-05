@@ -74,6 +74,26 @@ class TestNotifyDispatch:
             mock_notifier.disconnect.assert_awaited_once()
 
 
+class TestKeyboardInterrupt:
+    """Handler raises KeyboardInterrupt → exit code 130."""
+
+    def test_keyboard_interrupt_exits_130(self):
+        mock_handler = AsyncMock(side_effect=KeyboardInterrupt)
+        mock_commands = tuple(
+            CommandDef(name=cmd.name, handler=mock_handler, args=cmd.args)
+            if cmd.name == "notify"
+            else cmd
+            for cmd in COMMANDS
+        )
+
+        with (
+            patch("terok_dbus._cli.COMMANDS", mock_commands),
+            patch("sys.argv", ["terok-dbus", "notify", "Hi"]),
+        ):
+            with pytest.raises(SystemExit, match="130"):
+                main()
+
+
 class TestSubscribeDispatch:
     """Dispatch tests for ``terok-dbus subscribe``."""
 
