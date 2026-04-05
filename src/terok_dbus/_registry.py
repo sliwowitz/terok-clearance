@@ -77,8 +77,8 @@ async def _handle_subscribe() -> None:
     notifier = await create_notifier()
     try:
         subscriber = EventSubscriber(notifier)
-        await subscriber.start()
         try:
+            await subscriber.start()
             stop = asyncio.Event()
             loop = asyncio.get_running_loop()
             for sig in (signal.SIGINT, signal.SIGTERM):

@@ -30,6 +30,12 @@ Type=simple
 ExecStart={{BIN}} subscribe
 Restart=on-failure
 RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateDevices=yes
+RestrictAddressFamilies=AF_UNIX
 
 [Install]
 WantedBy=default.target
