@@ -144,12 +144,13 @@ class EventSubscriber:
         # Discover existing bridge instances
         await self._discover_instances()
 
-        # Subscribe to NameOwnerChanged — narrowed to terok bus names only
-        # (arg0namespace matches any name starting with the prefix)
+        # Subscribe to NameOwnerChanged — narrowed to terok bus names only.
+        # arg0namespace uses dot-separated hierarchy; strip the underscore-
+        # suffixed leaf to get 'org.terok.Shield1' (matches Container_*).
         shield_noc_rule = (
             f"type='signal',sender='{_DBUS_DEST}',path='{_DBUS_PATH}',"
             f"interface='{_DBUS_IFACE}',member='NameOwnerChanged',"
-            f"arg0namespace='{SHIELD_BUS_NAME_PREFIX.rstrip('_')}'"
+            f"arg0namespace='{SHIELD_BUS_NAME_PREFIX.rsplit('.', 1)[0]}'"
         )
         await _add_match(self._bus, shield_noc_rule)
         self._match_rules.append(shield_noc_rule)
