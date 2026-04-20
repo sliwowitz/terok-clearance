@@ -17,11 +17,13 @@ import asyncio
 import logging
 import shutil
 import sys
+from collections.abc import Awaitable, Callable
 
 from dbus_fast import BusType
 from dbus_fast.aio import MessageBus
 from dbus_fast.service import ServiceInterface, method, signal
 
+from terok_dbus._event_ingester import EventIngester, default_socket_path
 from terok_dbus._interfaces import (
     SHIELD_BUS_NAME,
     SHIELD_INTERFACE_NAME,
@@ -55,24 +57,60 @@ async def serve() -> None:
     subscriber = EventSubscriber(notifier, bus=bus)
     await subscriber.start()
 
+    ingester = EventIngester(
+        socket_path=default_socket_path(),
+        on_event=_make_event_sink(hub),
+    )
+    await ingester.start()
+
     try:
         await _wait_for_shutdown_signal()
     finally:
+        await ingester.stop()
         await subscriber.stop()
         await notifier.disconnect()
         bus.disconnect()
 
 
+def _make_event_sink(hub: "ShieldHub") -> "Callable[[dict], Awaitable[None]]":
+    """Return an async sink that relays reader events onto the hub's signals.
+
+    Each event ``type`` maps to one emission; unknown types are ignored so
+    the wire format can grow without breaking old hubs.  KeyError on a
+    malformed event is caught by the ingester's dispatch loop and logged,
+    so one missing field won't kill the relay.
+    """
+
+    async def sink(event: dict) -> None:
+        kind = event.get("type")
+        if kind == "pending":
+            hub.ConnectionBlocked(
+                event["container"],
+                event["id"],
+                event["dest"],
+                int(event["port"]),
+                int(event["proto"]),
+                event.get("domain", ""),
+            )
+        elif kind == "container_started":
+            hub.ContainerStarted(event["container"])
+        elif kind == "container_exited":
+            hub.ContainerExited(event["container"], event.get("reason", ""))
+
+    return sink
+
+
 class ShieldHub(ServiceInterface):
-    """The Shield1 service — dispatches verdicts and emits the applied ack.
+    """The Shield1 service — dispatches verdicts and emits container events.
 
     Verdicts are applied by shelling out to ``terok-shield allow|deny`` so
     the audited CLI remains the single trust boundary for nft / allowlist
-    writes.  The hub itself is pure D-Bus plumbing: a method handler, an
-    acknowledgement signal, and nothing else.  Container-emitted signals
-    (``ConnectionBlocked``, ``ContainerStarted``, ``ContainerExited``) are
-    fired by per-container readers via ``dbus-send`` and don't need to be
-    declared on the hub's ServiceInterface.
+    writes.  ``Container*`` and ``ConnectionBlocked`` signals originate
+    from per-container NFLOG readers that stream JSON to the hub over a
+    unix socket (see :class:`EventIngester`); the hub emits them onto the
+    session bus from here, where peer-credential auth against the session
+    dbus-daemon still succeeds — the readers themselves live in
+    ``NS_ROOTLESS`` and can't reach the session bus directly.
     """
 
     def __init__(self) -> None:
@@ -101,6 +139,29 @@ class ShieldHub(ServiceInterface):
     ) -> "sssb":  # pragma: no cover
         """Acknowledge that *action* on *request_id* was applied (or not)."""
         return [container, request_id, action, ok]
+
+    @signal()
+    def ConnectionBlocked(  # noqa: F821
+        self,
+        container: "s",
+        request_id: "s",
+        dest: "s",
+        port: "u",
+        proto: "u",
+        domain: "s",
+    ) -> "sssuus":  # pragma: no cover
+        """Republish a block event the hub received from a container reader."""
+        return [container, request_id, dest, port, proto, domain]
+
+    @signal()
+    def ContainerStarted(self, container: "s") -> "s":  # noqa: F821  # pragma: no cover
+        """Announce that a container's reader came online."""
+        return container
+
+    @signal()
+    def ContainerExited(self, container: "s", reason: "s") -> "ss":  # noqa: F821  # pragma: no cover
+        """Announce that a container's reader went away."""
+        return [container, reason]
 
 
 # ── Verdict execution ────────────────────────────────────────────────
