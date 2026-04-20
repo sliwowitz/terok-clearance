@@ -31,26 +31,48 @@ ExecStart={{BIN}} serve
 Restart=on-failure
 RestartSec=5
 
-# ── Hardening: filesystem guards only ─────────────────────────────────
+# ── Hardening: targeted filesystem guards only ────────────────────────
 #
 # The hub's threat model is "process-level compromise via a dbus-fast
 # parsing bug or malformed JSON from a container reader".  Constraining
-# the hub's filesystem view shrinks what such a compromise can reach —
-# an attacker sitting in the hub's memory can't read SSH keys, GPG
-# state, or shell history if $HOME is read-only; can't tamper with
-# installed binaries if /usr is read-only.  Worth having.
+# the hub's filesystem view shrinks what such a compromise can reach.
 #
-# None of the directives in this block trigger the NNP / SELinux
-# cascade that bit us with the seccomp-based family
-# (`RestrictAddressFamilies`, `SystemCallFilter`, etc. — see the
-# *rejected* block below).
-ProtectHome=read-only
-# ProtectHome=read-only covers /run/user/$UID too, which is where the
-# event ingester needs to create and unlink its unix socket.  %t
-# expands to $XDG_RUNTIME_DIR for user units — this carves exactly the
-# path the ingester owns back into writable.
+# *Blanket* directives don't fit here:
+#
+#   * `ProtectHome=read-only` — rootless podman needs write access to
+#     ~/.local/share/containers/ (BoltDB locks) and ~/.config/containers/
+#     (auth, config).  Making all of $HOME read-only breaks
+#     `podman inspect`, which the verdict path depends on.  Adding
+#     ReadWritePaths carve-outs for podman's dirs is possible but
+#     grants back the only paths that *are* security-sensitive from
+#     podman's perspective (stored auth tokens), so it's a wash.
+#
+#   * `ProtectSystem=full` — user services run as uid 1000; /usr,
+#     /boot, /etc are already read-only via normal filesystem perms.
+#     The directive is symbolic here, defending against a setuid
+#     escalation we haven't otherwise blocked anyway.
+#
+# The *targeted* form below works: hide only the paths whose
+# compromise actually matters (SSH keys, GPG state, shell history).
+# Podman's own state stays reachable; the hub's blast-radius for a
+# parser-bug compromise shrinks to "attacker has uid 1000 *minus* the
+# sensitive dotdirs".
+#
+# The `-` prefix on each path means "ignore if missing" — not every
+# user has .gnupg or a zsh history file, and we don't want the unit
+# to fail for that.
+#
+# None of these directives trigger the NNP / SELinux cascade that bit
+# us with the seccomp-based family — see the *rejected* block below.
+InaccessiblePaths=-%h/.ssh -%h/.gnupg -%h/.bash_history -%h/.zsh_history
+
+# ReadWritePaths kept even without ProtectHome — %t ($XDG_RUNTIME_DIR)
+# is where the event ingester creates its unix socket, and the
+# no-seccomp-for-unprivileged-without-NNP rule means we have to
+# whitelist writable paths explicitly under any future hardening
+# directive that would lock the view down.  Harmless when the view
+# isn't restricted; a safety net for the next directive we add.
 ReadWritePaths=%t
-ProtectSystem=full
 
 # ── Rejected: anything that compiles to a seccomp filter ──────────────
 #
