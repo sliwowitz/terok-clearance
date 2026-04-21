@@ -71,6 +71,9 @@ class _PendingBlock:
     container: str
     request_id: str
     dest: str
+    dedup_key: str
+    """Stable ``(container, domain-or-dest)`` identifier: a re-block of the
+    same target reuses this record's popup instead of stacking a new one."""
 
 
 # ── Match-rule helpers ────────────────────────────────────────────────
@@ -142,7 +145,8 @@ class EventSubscriber:
         self._bus = bus
         self._owns_bus = bus is None
         self._name_resolver = name_resolver
-        # request_id → pending block awaiting verdict + its notification.
+        # Dedup lookups scan the values — at a handful of live prompts the
+        # extra index isn't worth the coherence burden.
         self._pending: dict[str, _PendingBlock] = {}
         # notification_id → request_id — used by the Clearance1 legacy path.
         self._clearance_pending: dict[int, str] = {}
@@ -314,6 +318,7 @@ class EventSubscriber:
         elif msg.member == "ContainerExited" and len(msg.body) == 2:
             container, reason = msg.body
             _log.info("Container exited: %s (reason=%s)", container, reason)
+            self._dispatch(self._handle_container_exited(container))
             self._dispatch_lifecycle("on_container_exited", container, reason)
         elif msg.member == "ShieldUp" and len(msg.body) == 1:
             (container,) = msg.body
@@ -359,33 +364,56 @@ class EventSubscriber:
         proto: int,
         domain: str,
     ) -> None:
-        """Create a desktop notification for a blocked connection."""
+        """Prompt the operator to allow or deny a newly-blocked connection.
+
+        A prior unresolved block on the same ``(container, domain)``
+        target reuses its live popup: one decision, one domain, one
+        visible prompt.  The verdict then routes to the latest
+        ``request_id`` because that is what the shield is blocking
+        right now.
+        """
         display = domain if domain else dest
         proto_name = _PROTO_NAMES.get(proto, str(proto))
-        # Resolve name via injection when available; fall back to the raw ID.
-        # ``body`` prefers the user-facing name so the desktop popup reads
-        # "Container: my-task" rather than "Container: fa0905d97a1c".  The
-        # untouched ID still flows through the ``container_id`` kwarg for
-        # TUI consumers that want both, and is what we track internally
-        # for verdict-routing on the bus.
+        # Human-readable name in the body; raw ID still flows through
+        # ``container_id`` for TUI consumers and verdict routing.
         name = await self._resolve_container_name(container)
         _log.info("Blocked: %s:%d/%s (%s) [%s]", display, port, proto_name, container, request_id)
+
+        dedup_key = domain or dest
+        prior = self._live_block_on(container, dedup_key)
+
         nid = await self._notifier.notify(
             f"Blocked: {display}:{port}",
             f"Container: {name or container}\nProtocol: {proto_name}",
             actions=[("allow", "Allow"), ("deny", "Deny")],
             hints=_HINT_CRITICAL,
             timeout_ms=0,
+            replaces_id=prior.notification_id if prior else 0,
             container_id=container,
             container_name=name,
         )
+        # A raising notify() must leave the prior record intact so the
+        # lifecycle handlers keep a handle on the orphan popup.
+        if prior is not None:
+            self._pending.pop(prior.request_id, None)
         self._pending[request_id] = _PendingBlock(
-            notification_id=nid, container=container, request_id=request_id, dest=dest
+            notification_id=nid,
+            container=container,
+            request_id=request_id,
+            dest=dest,
+            dedup_key=dedup_key,
         )
         await self._notifier.on_action(
             nid,
             lambda action: self._dispatch(self._send_verdict(container, request_id, dest, action)),
         )
+
+    def _live_block_on(self, container: str, dedup_key: str) -> _PendingBlock | None:
+        """The pending block awaiting a verdict on this target, if any."""
+        for pending in self._pending.values():
+            if pending.container == container and pending.dedup_key == dedup_key:
+                return pending
+        return None
 
     async def _handle_verdict_applied(
         self, container: str, request_id: str, action: str, ok: bool
@@ -438,12 +466,25 @@ class EventSubscriber:
 
         While shield is in bypass, any block we previously asked the operator
         to clear is stale: traffic is flowing already, so clicking Allow/Deny
-        would write into an allowlist nobody is consulting right now.  We
-        drop the pending record and close the on-screen notification rather
-        than leaving a ghost button alive.  ``ShieldUp`` doesn't need a
-        companion — when shield comes back the next block triggers a fresh
-        ``ConnectionBlocked`` and the whole flow starts over.
+        would write into an allowlist nobody is consulting right now.
+        ``ShieldUp`` doesn't need a companion — when shield comes back the
+        next block triggers a fresh ``ConnectionBlocked`` and the flow
+        starts over.
         """
+        await self._purge_container(container)
+
+    async def _handle_container_exited(self, container: str) -> None:
+        """Close pending block notifications when *container* dies without ShieldDown.
+
+        Clean-stop paths usually emit ``ShieldDown`` first, but a kill or
+        OOM leaves ``ContainerExited`` as the only signal — without a
+        purge the pending records and on-screen popups would leak until
+        the subscriber restarts.  Idempotent alongside ``_handle_shield_down``.
+        """
+        await self._purge_container(container)
+
+    async def _purge_container(self, container: str) -> None:
+        """Drop every pending block for *container* and close its popups."""
         stale = [pending for pending in self._pending.values() if pending.container == container]
         for pending in stale:
             self._pending.pop(pending.request_id, None)

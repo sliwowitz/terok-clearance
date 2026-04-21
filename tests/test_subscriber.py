@@ -50,7 +50,15 @@ def _mock_bus() -> MagicMock:
     return bus
 
 
-def _connection_blocked_signal(request_id: str = _REQUEST_ID) -> Message:
+def _connection_blocked_signal(
+    request_id: str = _REQUEST_ID,
+    *,
+    container: str = CONTAINER,
+    dest: str = DEST_IP,
+    port: int = 443,
+    proto: int = 6,
+    domain: str = DOMAIN,
+) -> Message:
     """Construct a Shield1.ConnectionBlocked signal as the reader would emit it."""
     return Message(
         message_type=MessageType.SIGNAL,
@@ -58,11 +66,17 @@ def _connection_blocked_signal(request_id: str = _REQUEST_ID) -> Message:
         path=SHIELD_OBJECT_PATH,
         interface=SHIELD_INTERFACE_NAME,
         member="ConnectionBlocked",
-        body=[CONTAINER, request_id, DEST_IP, 443, 6, DOMAIN],
+        body=[container, request_id, dest, port, proto, domain],
     )
 
 
-def _verdict_applied_signal(action: str = "allow", ok: bool = True) -> Message:
+def _verdict_applied_signal(
+    action: str = "allow",
+    ok: bool = True,
+    *,
+    request_id: str = _REQUEST_ID,
+    container: str = CONTAINER,
+) -> Message:
     """Construct a Shield1.VerdictApplied signal as the hub would emit it."""
     return Message(
         message_type=MessageType.SIGNAL,
@@ -70,8 +84,29 @@ def _verdict_applied_signal(action: str = "allow", ok: bool = True) -> Message:
         path=SHIELD_OBJECT_PATH,
         interface=SHIELD_INTERFACE_NAME,
         member="VerdictApplied",
-        body=[CONTAINER, _REQUEST_ID, action, ok],
+        body=[container, request_id, action, ok],
     )
+
+
+def _shield_signal(member: str, *, container: str = CONTAINER) -> Message:
+    """Construct a parameter-less Shield1 signal (ShieldUp/Down/ContainerExited-ish)."""
+    return Message(
+        message_type=MessageType.SIGNAL,
+        sender=_HUB_UNIQUE,
+        path=SHIELD_OBJECT_PATH,
+        interface=SHIELD_INTERFACE_NAME,
+        member=member,
+        body=[container],
+    )
+
+
+def _seed_subscriber(notifier: AsyncMock | MagicMock) -> tuple[EventSubscriber, MagicMock]:
+    """Return a started-looking subscriber + its mock bus, ready for ``_on_message``."""
+    bus = _mock_bus()
+    sub = EventSubscriber(notifier, bus=bus)
+    sub._bus = bus
+    sub._shield_owner = _HUB_UNIQUE
+    return sub, bus
 
 
 # ── Lifecycle ─────────────────────────────────────────────────────────
@@ -262,10 +297,18 @@ class TestShieldSignals:
         from terok_dbus._subscriber import _PendingBlock
 
         sub._pending[_REQUEST_ID] = _PendingBlock(
-            notification_id=42, container=CONTAINER, request_id=_REQUEST_ID, dest=DEST_IP
+            notification_id=42,
+            container=CONTAINER,
+            request_id=_REQUEST_ID,
+            dest=DEST_IP,
+            dedup_key=DOMAIN,
         )
         sub._pending["other:1"] = _PendingBlock(
-            notification_id=43, container="other", request_id="other:1", dest=DEST_IP
+            notification_id=43,
+            container="other",
+            request_id="other:1",
+            dest=DEST_IP,
+            dedup_key=DOMAIN,
         )
         msg = Message(
             message_type=MessageType.SIGNAL,
@@ -322,6 +365,219 @@ class TestShieldSignals:
 
 
 # ── Verdict routing ───────────────────────────────────────────────────
+
+
+class TestLiveBlockDedup:
+    """Re-blocks of the same ``(container, domain-or-dest)`` reuse one prompt.
+
+    The reader's 30-second window isn't the only source of duplicates;
+    every re-attempt past that window, or any re-emit after the reader
+    restarts, fires another ``ConnectionBlocked``.  Until the operator
+    clicks, stacking prompts is noise — the notifier must collapse them
+    via ``replaces_id``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_second_block_same_domain_reuses_notification(
+        self, mock_notifier: AsyncMock
+    ) -> None:
+        sub, _ = _seed_subscriber(mock_notifier)
+
+        sub._on_message(_connection_blocked_signal(request_id=f"{CONTAINER}:1"))
+        await asyncio.sleep(0)
+        sub._on_message(_connection_blocked_signal(request_id=f"{CONTAINER}:2"))
+        await asyncio.sleep(0)
+
+        assert mock_notifier.notify.await_count == 2
+        first_call, second_call = mock_notifier.notify.await_args_list
+        assert first_call.kwargs.get("replaces_id", 0) == 0
+        assert second_call.kwargs.get("replaces_id") == 42
+        assert f"{CONTAINER}:1" not in sub._pending
+        assert f"{CONTAINER}:2" in sub._pending
+
+    @pytest.mark.asyncio
+    async def test_different_domain_creates_second_prompt(self, mock_notifier: AsyncMock) -> None:
+        sub, _ = _seed_subscriber(mock_notifier)
+
+        sub._on_message(_connection_blocked_signal(request_id=f"{CONTAINER}:1"))
+        await asyncio.sleep(0)
+        sub._on_message(
+            _connection_blocked_signal(
+                request_id=f"{CONTAINER}:2",
+                dest="198.51.100.9",
+                domain="other.example.net",
+            )
+        )
+        await asyncio.sleep(0)
+
+        assert mock_notifier.notify.await_count == 2
+        _, second_call = mock_notifier.notify.await_args_list
+        assert second_call.kwargs.get("replaces_id", 0) == 0
+        assert f"{CONTAINER}:1" in sub._pending
+        assert f"{CONTAINER}:2" in sub._pending
+
+    @pytest.mark.asyncio
+    async def test_different_container_same_domain_creates_second_prompt(
+        self, mock_notifier: AsyncMock
+    ) -> None:
+        sub, _ = _seed_subscriber(mock_notifier)
+
+        sub._on_message(_connection_blocked_signal(request_id=f"{CONTAINER}:1"))
+        await asyncio.sleep(0)
+        sub._on_message(
+            _connection_blocked_signal(
+                request_id="other-sandbox:1",
+                container="other-sandbox",
+            )
+        )
+        await asyncio.sleep(0)
+
+        assert mock_notifier.notify.await_count == 2
+        _, second_call = mock_notifier.notify.await_args_list
+        assert second_call.kwargs.get("replaces_id", 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_empty_domain_dedups_on_destination_ip(self, mock_notifier: AsyncMock) -> None:
+        sub, _ = _seed_subscriber(mock_notifier)
+
+        sub._on_message(_connection_blocked_signal(request_id=f"{CONTAINER}:1", domain=""))
+        await asyncio.sleep(0)
+        sub._on_message(_connection_blocked_signal(request_id=f"{CONTAINER}:2", domain=""))
+        await asyncio.sleep(0)
+
+        assert mock_notifier.notify.await_count == 2
+        _, second_call = mock_notifier.notify.await_args_list
+        assert second_call.kwargs.get("replaces_id") == 42
+
+    @pytest.mark.asyncio
+    async def test_verdict_applied_frees_live_slot(self, mock_notifier: AsyncMock) -> None:
+        sub, _ = _seed_subscriber(mock_notifier)
+
+        sub._on_message(_connection_blocked_signal(request_id=f"{CONTAINER}:1"))
+        await asyncio.sleep(0)
+        sub._on_message(_verdict_applied_signal(request_id=f"{CONTAINER}:1"))
+        await asyncio.sleep(0)
+        sub._on_message(_connection_blocked_signal(request_id=f"{CONTAINER}:3"))
+        await asyncio.sleep(0)
+
+        *_, third_call = mock_notifier.notify.await_args_list
+        assert third_call.kwargs.get("replaces_id", 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_click_on_reused_notification_routes_to_latest_request(
+        self, mock_notifier: AsyncMock
+    ) -> None:
+        """Click on the reused popup must route the verdict to the latest request_id.
+
+        The whole point of dedup is that the surviving popup represents
+        the *current* block the shield is enforcing — the ``on_action``
+        closure on the replaced notification must close over the *new*
+        request_id, not the superseded one.
+        """
+        sub, bus = _seed_subscriber(mock_notifier)
+
+        first_rid = f"{CONTAINER}:1"
+        second_rid = f"{CONTAINER}:2"
+
+        sub._on_message(_connection_blocked_signal(request_id=first_rid))
+        await asyncio.sleep(0)
+        sub._on_message(_connection_blocked_signal(request_id=second_rid))
+        await asyncio.sleep(0)
+
+        assert mock_notifier.notify.await_args_list[1].kwargs["replaces_id"] == 42
+        assert second_rid in sub._pending and first_rid not in sub._pending
+
+        latest_callback = mock_notifier.on_action.await_args_list[1][0][1]
+        latest_callback("allow")
+        await asyncio.sleep(0)
+
+        verdict_msgs = [
+            m
+            for m in (c.args[0] for c in bus.call.await_args_list if c.args)
+            if m.member == "Verdict"
+        ]
+        assert len(verdict_msgs) == 1
+        assert verdict_msgs[0].body == [CONTAINER, second_rid, DEST_IP, "allow"]
+
+    @pytest.mark.asyncio
+    async def test_notify_failure_preserves_superseded_pending_entry(
+        self, mock_notifier: AsyncMock
+    ) -> None:
+        """A raising ``notify`` must leave the prior pending record intact.
+
+        Dropping it eagerly would orphan the on-screen popup — a later
+        ``VerdictApplied`` or ``ShieldDown`` for the first request_id
+        would have no handle to close or update it.
+        """
+        sub, _ = _seed_subscriber(mock_notifier)
+
+        first_rid = f"{CONTAINER}:1"
+        second_rid = f"{CONTAINER}:2"
+
+        sub._on_message(_connection_blocked_signal(request_id=first_rid))
+        await asyncio.sleep(0)
+        mock_notifier.notify.side_effect = RuntimeError("bus disconnected")
+        sub._on_message(_connection_blocked_signal(request_id=second_rid))
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        assert first_rid in sub._pending
+        assert second_rid not in sub._pending
+        assert sub._pending[first_rid].notification_id == 42
+
+    @pytest.mark.asyncio
+    async def test_shield_down_frees_live_slot(self) -> None:
+        notifier = AsyncMock()
+        notifier.notify.return_value = 42
+        notifier.close = AsyncMock()
+        notifier.on_shield_down = MagicMock()
+        sub, _ = _seed_subscriber(notifier)
+
+        sub._on_message(_connection_blocked_signal(request_id=f"{CONTAINER}:1"))
+        await asyncio.sleep(0)
+
+        sub._on_message(_shield_signal("ShieldDown"))
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        sub._on_message(_connection_blocked_signal(request_id=f"{CONTAINER}:2"))
+        await asyncio.sleep(0)
+        *_, last_call = notifier.notify.await_args_list
+        assert last_call.kwargs.get("replaces_id", 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_container_exited_purges_pending_and_closes_popup(self) -> None:
+        """A dying container without a trailing ShieldDown must still release state.
+
+        Clean stops usually emit ``ShieldDown`` first, but a kill or OOM
+        leaves only ``ContainerExited`` — without cleanup here ``_pending``
+        leaks and the desktop popup hangs around.
+        """
+        notifier = AsyncMock()
+        notifier.notify.return_value = 42
+        notifier.close = AsyncMock()
+        notifier.on_container_exited = MagicMock()
+        sub, _ = _seed_subscriber(notifier)
+
+        sub._on_message(_connection_blocked_signal(request_id=f"{CONTAINER}:1"))
+        await asyncio.sleep(0)
+        assert f"{CONTAINER}:1" in sub._pending
+
+        exited = Message(
+            message_type=MessageType.SIGNAL,
+            sender=_HUB_UNIQUE,
+            path=SHIELD_OBJECT_PATH,
+            interface=SHIELD_INTERFACE_NAME,
+            member="ContainerExited",
+            body=[CONTAINER, "poststop"],
+        )
+        sub._on_message(exited)
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        notifier.close.assert_awaited_once_with(42)
+        assert f"{CONTAINER}:1" not in sub._pending
+        notifier.on_container_exited.assert_called_once_with(CONTAINER, "poststop")
 
 
 class TestSendVerdict:
