@@ -60,6 +60,14 @@ class ClearanceClient:
         self._rpc_proxy: object | None = None
         self._stream_task: asyncio.Task[None] | None = None
         self._stopping = False
+        # Poked by :meth:`poke_reconnect` to cut short the current
+        # back-off sleep — the TUI sets this on terminal-focus gain
+        # so an idle operator's window snaps back online instead of
+        # waiting out the ten-second back-off cap.  Lazily created on
+        # first use because the running event loop may not exist yet
+        # at ``__init__`` time (e.g. when a Textual App builds its
+        # ``ClearanceClient`` from a sync ``on_mount``).
+        self._reconnect_poke: asyncio.Event | None = None
 
     #: Cap on the reconnect back-off.  Keeps latency-after-hub-restart
     #: bounded for the TUI + notifier while still damping a flapping hub.
@@ -112,6 +120,17 @@ class ClearanceClient:
             self._stream_task = None
         self._close_transports()
 
+    def poke_reconnect(self) -> None:
+        """Skip the current back-off sleep; try to reconnect immediately.
+
+        No-op when the stream is healthy (or not started) — the poke
+        only registers inside :meth:`_run_stream`'s backoff window.
+        Safe to call from any coroutine on the client's event loop;
+        callers (TUI focus handler) don't need to await anything.
+        """
+        if self._reconnect_poke is not None:
+            self._reconnect_poke.set()
+
     async def verdict(self, container: str, request_id: str, dest: str, action: str) -> bool:
         """Apply *action* (``allow`` / ``deny``) to *dest* via the hub's ``Verdict`` RPC.
 
@@ -158,6 +177,7 @@ class ClearanceClient:
         """
         if self._sub_proxy is None:
             raise RuntimeError("ClearanceClient._run_stream called before connect()")
+        self._reconnect_poke = asyncio.Event()
         backoff = 1.0
         while not self._stopping:
             try:
@@ -190,8 +210,19 @@ class ClearanceClient:
             if self._stopping:
                 return
             self._close_transports()
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, self._MAX_RECONNECT_BACKOFF_S)
+            # Honour an in-flight :meth:`poke_reconnect` call by cutting
+            # the back-off short.  The poke is cleared eagerly here so
+            # two fast pokes in succession still collapse into one
+            # retry cycle.
+            poke_fired = False
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._reconnect_poke.wait(), timeout=backoff)
+                poke_fired = True
+            if poke_fired:
+                self._reconnect_poke.clear()
+                backoff = 1.0
+            else:
+                backoff = min(backoff * 2, self._MAX_RECONNECT_BACKOFF_S)
             try:
                 await self._connect()
                 _log.info("clearance client reconnected to hub")

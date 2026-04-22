@@ -196,12 +196,21 @@ class EventSubscriber:
     async def wait_closed(self) -> None:
         """Return when the underlying client's event stream has ended.
 
-        Lets the notifier race ``wait_for_shutdown_signal`` against the
-        hub going away, so ``systemctl restart terok-dbus`` triggers a
-        clean notifier exit + systemd restart rather than leaving us
-        silently subscribed to a dead socket.
+        ``ClearanceClient`` now auto-reconnects on hub drops, so this
+        only returns on an explicit ``stop()``.  Kept as a hook for
+        callers that want to observe terminal state without polling.
         """
         await self._client.wait_closed()
+
+    def poke_reconnect(self) -> None:
+        """Skip the client's current back-off sleep; attempt to reconnect now.
+
+        No-op when the client is healthy or hasn't started.  Useful
+        for UI frontends (TUI focus-gain event, manual refresh button)
+        that want an idle window to snap back online without waiting
+        out the ten-second back-off cap.
+        """
+        self._client.poke_reconnect()
 
     # ── Event dispatch ────────────────────────────────────────────────
 
