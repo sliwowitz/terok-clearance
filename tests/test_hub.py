@@ -11,7 +11,7 @@ transport.  End-to-end varlink round-trips live in ``test_client.py``.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -266,6 +266,19 @@ class TestApplyVerdict:
         assert event.type == "verdict_applied"
         assert event.ok is False
 
+    @pytest.mark.asyncio
+    async def test_shield_failure_restores_authz_binding(self) -> None:
+        """A transient shield failure must leave the binding intact for retries."""
+        hub = _hub()
+        hub._update_live_verdicts(_blocked())
+        hub._run_shield = _stub_shield_fail
+        request_id = f"{CONTAINER}:1"
+
+        with pytest.raises(ShieldCliFailed):
+            await hub._apply_verdict(CONTAINER, request_id, DOMAIN, "allow")
+
+        assert hub._live_verdicts[request_id] == (CONTAINER, DOMAIN)
+
 
 # ── Shield subprocess dispatch ────────────────────────────────────────
 
@@ -308,7 +321,7 @@ class TestRunShield:
         hub = ClearanceHub(shield_binary="/bin/true")
         proc = AsyncMock()
         proc.communicate = AsyncMock(side_effect=TimeoutError)
-        proc.kill = lambda: None
+        proc.kill = MagicMock()
         with (
             patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)),
             patch("asyncio.wait_for", AsyncMock(side_effect=TimeoutError)),
@@ -316,6 +329,7 @@ class TestRunShield:
             ok, msg = await hub._run_shield(CONTAINER, DOMAIN, "allow")
         assert ok is False
         assert "timed out" in msg
+        proc.kill.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_spawn_oserror_soft_fails(self) -> None:

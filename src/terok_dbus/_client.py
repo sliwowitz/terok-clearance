@@ -92,19 +92,29 @@ class ClearanceClient:
         restarting themselves.
         """
         self._on_event = on_event
+        self._stopping = False
         await self._connect()
         self._stream_task = asyncio.create_task(self._run_stream())
 
     async def _connect(self) -> None:
-        """Open both varlink connections and build proxies."""
-        self._sub_transport, sub_proto = await connect_unix_varlink(
-            VarlinkClientProtocol, str(self._socket_path)
-        )
-        self._rpc_transport, rpc_proto = await connect_unix_varlink(
-            VarlinkClientProtocol, str(self._socket_path)
-        )
-        self._sub_proxy = sub_proto.make_proxy(Clearance1Interface)
-        self._rpc_proxy = rpc_proto.make_proxy(Clearance1Interface)
+        """Open both varlink connections and build proxies.
+
+        Rolls back the first transport if the second connect (or either
+        proxy build) raises, so a partial failure doesn't leak a live
+        socket and leave the instance half-open.
+        """
+        try:
+            self._sub_transport, sub_proto = await connect_unix_varlink(
+                VarlinkClientProtocol, str(self._socket_path)
+            )
+            self._rpc_transport, rpc_proto = await connect_unix_varlink(
+                VarlinkClientProtocol, str(self._socket_path)
+            )
+            self._sub_proxy = sub_proto.make_proxy(Clearance1Interface)
+            self._rpc_proxy = rpc_proto.make_proxy(Clearance1Interface)
+        except BaseException:
+            self._close_transports()
+            raise
 
     def _close_transports(self) -> None:
         """Drop both transports + proxies; next I/O forces a reconnect."""

@@ -28,6 +28,7 @@ from terok_dbus._install import check_units_outdated, read_installed_unit_versio
 from terok_dbus._notifier import DbusNotifier
 from terok_dbus._null import NullNotifier
 from terok_dbus._protocol import Notifier
+from terok_dbus._service import configure_logging, wait_for_shutdown_signal
 from terok_dbus._subscriber import EventSubscriber
 from terok_dbus._wire import (
     CLEARANCE_INTERFACE_NAME,
@@ -57,10 +58,12 @@ __all__ = [
     "UnknownRequest",
     "VerdictTupleMismatch",
     "check_units_outdated",
+    "configure_logging",
     "create_notifier",
     "default_clearance_socket_path",
     "read_installed_unit_version",
     "serve",
+    "wait_for_shutdown_signal",
 ]
 
 __version__ = "0.0.0"

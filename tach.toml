@@ -46,6 +46,7 @@ depends_on = [
     { path = "terok_dbus._notifier" },
     { path = "terok_dbus._null" },
     { path = "terok_dbus._protocol" },
+    { path = "terok_dbus._service" },
     { path = "terok_dbus._subscriber" },
     { path = "terok_dbus._wire" },
 ]

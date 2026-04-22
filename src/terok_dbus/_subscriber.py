@@ -184,10 +184,21 @@ class EventSubscriber:
         _log.info("clearance subscriber online")
 
     async def stop(self) -> None:
-        """Drain pending tasks and close the transport."""
-        for task in self._tasks:
+        """Drain pending tasks and close the transport.
+
+        Closes the client first so no new handler tasks are scheduled,
+        then awaits the currently-tracked tasks to settle (with their
+        own ``CancelledError`` suppressed).  A bare ``sleep(0)`` would
+        yield only one loop turn — not enough for cancellation to
+        propagate through chained awaits — and ``tasks.clear()`` on its
+        own would drop references to tasks still writing to handles we
+        then close.
+        """
+        tasks = list(self._tasks)
+        for task in tasks:
             task.cancel()
-        await asyncio.sleep(0)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
         await self._client.stop()
         self._pending.clear()

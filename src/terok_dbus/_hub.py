@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import shutil
 import sys
 from collections.abc import AsyncIterator
@@ -318,6 +319,12 @@ class ClearanceHub:
             )
 
         ok, stderr_snippet = await self._run_shield(container, dest, action)
+        if not ok:
+            # Restore the authz binding so a retry can reach shield — a
+            # spawn / timeout / non-zero exit is transient and the next
+            # ``Verdict`` on the same ``request_id`` should still land on
+            # the same ``(container, dest)`` pair.
+            self._live_verdicts[request_id] = live
         # Republish the outcome on the event stream so every subscriber
         # (not just this caller) can flip its notification state.
         self._fan_out(
@@ -404,7 +411,11 @@ def _translate_reader_event(wire_type: str, raw: dict) -> ClearanceEvent:
 def _find_shield_binary() -> str | None:
     """Locate ``terok-shield`` — sibling venv first, then PATH, then ``None``."""
     sibling = Path(sys.executable).parent / "terok-shield"
-    if sibling.is_file():
+    # ``is_file`` would happily return a non-executable artifact in the
+    # venv's ``bin/`` dir (broken install, editable-shim dropout) — check
+    # for the exec bit so the caller still gets a working fallback via
+    # ``shutil.which`` instead of spawn-failing on every verdict.
+    if sibling.is_file() and os.access(sibling, os.X_OK):
         return str(sibling)
     return shutil.which("terok-shield")
 

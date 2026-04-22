@@ -22,6 +22,7 @@ import json
 import socket
 from collections.abc import AsyncIterator
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -248,3 +249,151 @@ async def test_verdict_before_start_returns_false() -> None:
     c = ClearanceClient(socket_path=Path("/dev/null"))
     ok = await c.verdict(CONTAINER, f"{CONTAINER}:1", DOMAIN, "allow")
     assert ok is False
+
+
+# ── Reconnect loop ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reconnects_after_hub_restart(private_runtime_dir: Path) -> None:
+    """Hub stops + restarts → client's Subscribe loop rebinds automatically."""
+    sock_path = private_runtime_dir / "clearance.sock"
+    reader_path = private_runtime_dir / "reader.sock"
+    hub_1 = ClearanceHub(clearance_socket=sock_path, reader_socket=reader_path)
+    hub_1._run_shield = _stub_shield_ok
+    await hub_1.start()
+
+    received: list = []
+
+    async def on_event(event) -> None:  # noqa: ANN001
+        received.append(event)
+
+    c = ClearanceClient(socket_path=sock_path)
+    await c.start(on_event)
+    await asyncio.sleep(0.05)
+
+    # Drop the hub, stand a fresh one up on the same path.
+    await hub_1.stop()
+    await asyncio.sleep(0.05)  # let the client's stream task observe the reset
+    hub_2 = ClearanceHub(clearance_socket=sock_path, reader_socket=reader_path)
+    hub_2._run_shield = _stub_shield_ok
+    await hub_2.start()
+
+    # Skip the client's back-off sleep so the test doesn't drag.
+    c.poke_reconnect()
+    for _ in range(50):
+        await asyncio.sleep(0.05)
+        if c._sub_proxy is not None:
+            break
+
+    _emit_reader_event(
+        reader_path,
+        {
+            "type": "pending",
+            "container": CONTAINER,
+            "id": f"{CONTAINER}:2",
+            "dest": DEST_IP,
+            "port": 443,
+            "proto": 6,
+            "domain": DOMAIN,
+        },
+    )
+    await asyncio.sleep(0.2)
+    try:
+        assert any(e.request_id == f"{CONTAINER}:2" for e in received)
+    finally:
+        with contextlib.suppress(Exception):
+            await c.stop()
+        with contextlib.suppress(Exception):
+            await hub_2.stop()
+
+
+@pytest.mark.asyncio
+async def test_poke_reconnect_is_noop_when_healthy(
+    client: tuple[ClearanceClient, list],
+) -> None:
+    """Poking a connected client must not disturb the live Subscribe() stream."""
+    c, _received = client
+    c.poke_reconnect()
+    await asyncio.sleep(0.05)
+    # The internal event was set, but nothing awaits it while the stream
+    # loop is inside Subscribe() — verify the client is still serviceable
+    # by issuing a verdict.  Any malformed teardown would surface here.
+    ok = await c.verdict(CONTAINER, f"{CONTAINER}:unknown", DOMAIN, "allow")
+    assert ok is False  # unknown request_id refusal
+
+
+@pytest.mark.asyncio
+async def test_event_callback_exception_is_logged_but_stream_survives(
+    hub: ClearanceHub, client: tuple[ClearanceClient, list]
+) -> None:
+    """A raising callback doesn't kill the stream — next event still arrives."""
+    c, received = client
+    calls = {"n": 0}
+
+    async def flaky(event) -> None:  # noqa: ANN001
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("first event blows up")
+        received.append(event)
+
+    c._on_event = flaky
+    _emit_reader_event(
+        hub._reader_socket,
+        {
+            "type": "pending",
+            "container": CONTAINER,
+            "id": f"{CONTAINER}:1",
+            "dest": DEST_IP,
+            "port": 443,
+            "proto": 6,
+            "domain": "a.example",
+        },
+    )
+    await asyncio.sleep(0.1)
+    _emit_reader_event(
+        hub._reader_socket,
+        {
+            "type": "pending",
+            "container": CONTAINER,
+            "id": f"{CONTAINER}:2",
+            "dest": DEST_IP,
+            "port": 443,
+            "proto": 6,
+            "domain": "b.example",
+        },
+    )
+    await asyncio.sleep(0.1)
+    assert any(e.request_id == f"{CONTAINER}:2" for e in received)
+
+
+@pytest.mark.asyncio
+async def test_start_rollback_on_partial_connect_failure(tmp_path: Path) -> None:
+    """If the second transport dial fails, no live socket leaks behind."""
+    import terok_dbus._client as client_mod
+
+    sock = tmp_path / "clearance.sock"
+    first_transport = None
+    calls = {"n": 0}
+
+    async def flaky_connect(*args, **kwargs):  # noqa: ANN002,ANN003
+        nonlocal first_transport
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # Succeed — the test wants this transport rolled back on failure.
+            # MagicMock for the transport because _close_transports calls
+            # ``t.close()`` synchronously; AsyncMock would produce an
+            # un-awaited coroutine warning.
+            first_transport = MagicMock()
+            return (first_transport, MagicMock())
+        raise OSError("simulated second-connect failure")
+
+    c = ClearanceClient(socket_path=sock)
+    with patch.object(client_mod, "connect_unix_varlink", flaky_connect):
+        with pytest.raises(OSError, match="simulated second-connect failure"):
+            await c.start(lambda _: None)
+
+    assert c._sub_transport is None
+    assert c._rpc_transport is None
+    assert first_transport is not None
+    first_transport.close.assert_called()

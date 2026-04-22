@@ -31,10 +31,12 @@ class TestPublicApi:
             "UnknownRequest",
             "VerdictTupleMismatch",
             "check_units_outdated",
+            "configure_logging",
             "create_notifier",
             "default_clearance_socket_path",
             "read_installed_unit_version",
             "serve",
+            "wait_for_shutdown_signal",
         }
         assert set(terok_dbus.__all__) == expected
 
