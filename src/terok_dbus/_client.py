@@ -124,7 +124,10 @@ class ClearanceClient:
 
     async def _run_stream(self) -> None:
         """Pump Subscribe() events into the user callback."""
-        assert self._sub_proxy is not None
+        # ``assert`` gets stripped under ``python -O``; use an explicit
+        # guard so the invariant still fires in production builds.
+        if self._sub_proxy is None:
+            raise RuntimeError("ClearanceClient._run_stream called before connect()")
         try:
             async for reply in self._sub_proxy.Subscribe():
                 event = reply["event"]

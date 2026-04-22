@@ -120,36 +120,49 @@ class ClearanceHub:
     # ── lifecycle ──────────────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Bring the ingester + varlink server online and accept clients."""
+        """Bring the ingester + varlink server online and accept clients.
+
+        Transactional: if the varlink bind fails after the ingester is
+        already listening, the ingester is stopped before the exception
+        propagates so a half-started hub doesn't leak a live
+        reader-side socket on systemd restart paths.
+        """
         self._ingester = EventIngester(
             socket_path=self._reader_socket or _default_reader_socket(),
             on_event=self._relay_reader_event,
         )
         await self._ingester.start()
-
-        registry = VarlinkInterfaceRegistry()
-        registry.register_interface(
-            Clearance1Interface(
-                event_stream_factory=self._subscribe,
-                apply_verdict=self._apply_verdict,
+        try:
+            registry = VarlinkInterfaceRegistry()
+            registry.register_interface(
+                Clearance1Interface(
+                    event_stream_factory=self._subscribe,
+                    apply_verdict=self._apply_verdict,
+                )
             )
-        )
-        registry.register_interface(
-            VarlinkServiceInterface(
-                vendor="terok",
-                product="terok-dbus",
-                version=_own_version(),
-                url="https://github.com/terok-ai/terok-dbus",
-                registry=registry,
+            registry.register_interface(
+                VarlinkServiceInterface(
+                    vendor="terok",
+                    product="terok-dbus",
+                    version=_own_version(),
+                    url="https://github.com/terok-ai/terok-dbus",
+                    registry=registry,
+                )
             )
-        )
 
-        from terok_dbus._unix_socket import bind_hardened
+            from terok_dbus._unix_socket import bind_hardened
 
-        async def _factory(path: str) -> object:
-            return await create_unix_server(registry.protocol_factory, path=path)
+            async def _factory(path: str) -> object:
+                return await create_unix_server(registry.protocol_factory, path=path)
 
-        self._varlink_server = await bind_hardened(_factory, self._clearance_socket, "clearance")
+            self._varlink_server = await bind_hardened(
+                _factory, self._clearance_socket, "clearance"
+            )
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await self._ingester.stop()
+            self._ingester = None
+            raise
         _log.info("clearance hub online at %s", self._clearance_socket)
 
     async def stop(self) -> None:
@@ -180,7 +193,7 @@ class ClearanceHub:
 
     # ── reader ingestion ───────────────────────────────────────────────
 
-    async def _relay_reader_event(self, raw: dict) -> None:
+    async def _relay_reader_event(self, raw: dict) -> None:  # NOSONAR S7503
         """Translate one ingester dict → a :class:`ClearanceEvent` + fan it out.
 
         Records the authz binding on ``connection_blocked`` events and
@@ -229,8 +242,13 @@ class ClearanceHub:
                 self._live_verdicts.pop(rid, None)
 
     def _fan_out(self, event: ClearanceEvent) -> None:
-        """Push *event* to every subscriber queue, dropping oldest on overflow."""
-        for queue in list(self._subscribers):
+        """Push *event* to every subscriber queue, dropping oldest on overflow.
+
+        Iterates ``self._subscribers`` directly — the loop body can't
+        yield (no ``await``), so no other coroutine can mutate the set
+        between iterations and a defensive copy would be pointless.
+        """
+        for queue in self._subscribers:
             if queue.full():
                 with contextlib.suppress(asyncio.QueueEmpty):
                     queue.get_nowait()

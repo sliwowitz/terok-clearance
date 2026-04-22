@@ -51,8 +51,12 @@ def install_service(bin_path: Path | list[str]) -> Path:
         The on-disk path the unit was written to.
     """
     template = _read_template()
-    rendered = template.replace("{{BIN}}", _render_exec_start(bin_path)).replace(
-        "{{UNIT_VERSION}}", str(_UNIT_VERSION)
+    # Substitute the trusted int-string ``{{UNIT_VERSION}}`` before the
+    # operator-supplied ``{{BIN}}`` path — a hand-crafted bin_path
+    # containing the literal ``{{UNIT_VERSION}}`` substring would
+    # otherwise be partially rewritten by the second replace.
+    rendered = template.replace("{{UNIT_VERSION}}", str(_UNIT_VERSION)).replace(
+        "{{BIN}}", _render_exec_start(bin_path)
     )
     dest = _user_systemd_dir() / UNIT_NAME
     dest.parent.mkdir(parents=True, exist_ok=True)
