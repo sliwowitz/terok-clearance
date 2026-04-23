@@ -1,14 +1,15 @@
 # SPDX-FileCopyrightText: 2026 Jiri Vyskocil
 # SPDX-License-Identifier: Apache-2.0
 
-"""Turn a podman container ID into a task-aware :class:`ContainerIdentity`.
+"""Turn a container id into a task-aware :class:`ContainerIdentity`.
 
-Composes :class:`PodmanInspector` (container name + OCI annotations)
-with a data-contract YAML lookup to produce notification-ready
-identities.  Clearance carries no Python-import coupling to terok; the
-orchestrator that created the container publishes a path annotation
-pointing at its own metadata file, and the resolver reads ``.name``
-from that file on each call.
+Composes an injected :class:`ContainerInspector` (container name +
+OCI annotations, produced by whichever runtime backend the caller
+plugged in) with a data-contract YAML lookup to produce
+notification-ready identities.  Clearance carries no Python-import
+coupling to any orchestrator; the one that created the container
+publishes a path annotation pointing at its own metadata file, and
+the resolver reads ``.name`` from that file on each call.
 
 .. rubric:: Annotation contract
 
@@ -53,13 +54,13 @@ ANNOTATION_TASK_META_PATH = "ai.terok.task_meta_path"
 
 
 class IdentityResolver:
-    """Compose podman inspect + task-meta YAML into :class:`ContainerIdentity`.
+    """Compose a :class:`ContainerInspector` lookup + task-meta YAML into an identity.
 
     Callable: ``resolver(container_id) -> ContainerIdentity``.  Four
     soft-fail paths, all returning a degraded identity that keeps the
     notification pipeline usable:
 
-    * ``podman inspect`` failed → empty :class:`ContainerIdentity`;
+    * The inspector failed → empty :class:`ContainerIdentity`;
       the subscriber falls back to the raw container ID.
     * Container carries no terok annotations (a standalone container
       that happened to hit the firewall) → container-name-only.
@@ -86,12 +87,12 @@ class IdentityResolver:
         try:
             info = self._inspector(container_id)
         except Exception:
-            # ``PodmanInspector`` normally soft-fails by returning an
-            # empty ``ContainerInfo``, but a podman-side race or an
-            # unexpected error path can still raise.  Clamp it here so
-            # the caller (notifier / TUI) never takes a crash from
-            # identity resolution.
-            _log.debug("PodmanInspector raised for %s", container_id, exc_info=True)
+            # The contract says inspectors soft-fail by returning an
+            # empty ``ContainerInfo``, but a runtime-side race or an
+            # unexpected error path in a third-party backend can still
+            # raise.  Clamp it here so the caller (notifier / TUI)
+            # never takes a crash from identity resolution.
+            _log.debug("ContainerInspector raised for %s", container_id, exc_info=True)
             return ContainerIdentity()
         if not info.container_id:
             return ContainerIdentity()
@@ -111,13 +112,25 @@ class IdentityResolver:
 def _read_task_name(meta_path: str) -> str:
     """Return the ``name`` field from the YAML at *meta_path*, or ``""`` on any failure.
 
-    Every error mode (missing file, permission denied, malformed YAML,
-    missing ``name`` key, non-string value) maps to an empty string so
-    the caller keeps its fallback label.
+    Every error mode maps to an empty string so the caller keeps its
+    fallback label:
+
+    * Non-absolute path — the annotation contract requires an absolute
+      path; a relative path is almost certainly a bug (notifier runs
+      under systemd with a PID-scoped cwd the writer can't predict).
+    * Missing file / permission denied (any :class:`OSError`).
+    * Invalid UTF-8 (:class:`UnicodeDecodeError`) — the YAML spec
+      assumes UTF-8; treat mojibake like any other unreadable file.
+    * Malformed YAML (:class:`yaml.YAMLError`).
+    * Missing ``name`` key or non-string value.
     """
+    path = Path(meta_path)
+    if not path.is_absolute():
+        _log.debug("task_meta_path is not absolute, refusing: %s", meta_path)
+        return ""
     try:
-        text = Path(meta_path).read_text(encoding="utf-8")
-    except OSError:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
         _log.debug("task_meta_path unreadable: %s", meta_path)
         return ""
     try:

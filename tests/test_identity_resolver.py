@@ -123,6 +123,23 @@ class TestTaskMetaPathContract:
         identity = IdentityResolver(inspector=inspector)("c")
         assert identity.task_name == ""
 
+    def test_relative_meta_path_refused(self, tmp_path: Path) -> None:
+        """Annotation contract requires an absolute path; a relative one is refused."""
+        meta = tmp_path / "task.yml"
+        meta.write_text("name: ignored\n", encoding="utf-8")
+        # Pass the bare filename, not the absolute path — shouldn't be read.
+        inspector = _fake_inspector(_info(name="c", project="p", task="t", meta_path="task.yml"))
+        identity = IdentityResolver(inspector=inspector)("c")
+        assert identity.task_name == ""
+
+    def test_invalid_utf8_falls_back(self, tmp_path: Path) -> None:
+        """Non-UTF8 bytes in the YAML file → soft-fail, not a :class:`UnicodeDecodeError`."""
+        meta = tmp_path / "mojibake.yml"
+        meta.write_bytes(b"name: \xff\xfe\xfa\n")
+        inspector = _fake_inspector(_info(name="c", project="p", task="t", meta_path=str(meta)))
+        identity = IdentityResolver(inspector=inspector)("c")
+        assert identity.task_name == ""
+
     def test_rename_visible_on_next_call(self, tmp_path: Path) -> None:
         """The whole point of the path-annotation: rename is live, not snapshot."""
         meta = tmp_path / "task.yml"
