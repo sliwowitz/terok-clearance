@@ -15,7 +15,7 @@
 
 ## Repo layout
 
-- `src/terok_clearance/`: Python package (public API in `__init__.py`, CLI in `_cli.py`)
+- `src/terok_clearance/`: Python package.  Public API is curated in `__init__.py`; internals live in feature-grouped sub-packages (`domain/`, `wire/`, `hub/`, `client/`, `notifications/`, `runtime/`, `cli/`) with `tach` layers running orthogonal to the directory tree.
 - `tests/`: pytest test suite
 - `docs/`: MkDocs documentation source
 
@@ -75,12 +75,22 @@ The project uses [tach](https://github.com/gauge-sh/tach) to enforce module boun
 - If adding a new dependency between modules, update `depends_on` in `tach.toml`
 - CI will reject boundary violations
 
-Planned module structure:
+Architecture is two-axis: feature-grouped directories + orthogonal
+tach layers.  Directories say *what* (clearance flow, wire schema,
+deployment plumbing); layers say *how free* (domain modules know
+nothing about wire; wire knows only domain; infrastructure knows
+both; interface knows all of the above).
+
 ```
-_constants, _protocol, _null → no dependencies
-_notifier → depends on _constants only
-_cli → depends on terok_clearance (public API)
+interface       ──→ cli/, __init__.py
+infrastructure  ──→ hub/, client/, notifications/{desktop,null,callback,factory}, runtime/
+wire            ──→ wire/
+domain          ──→ domain/, notifications/protocol.py
 ```
+
+A leaf may import from any layer below its own without listing the
+dep; same-layer / cross-feature deps must be explicit in
+``tach.toml``'s ``[[modules]] depends_on``.
 
 ## Development Workflow
 

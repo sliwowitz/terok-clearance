@@ -73,7 +73,7 @@ async def _handle_install_service(*, bin_path: str | None = None) -> None:  # NO
     """Install the terok-clearance systemd user unit and reload the user daemon.
 
     ``async`` is structural, not semantic: every CommandDef.handler goes
-    through ``asyncio.run(handler(**kwargs))`` in ``_cli.py``.  Sonar's
+    through ``asyncio.run(handler(**kwargs))`` in ``cli.main``.  Sonar's
     "async without await" rule is correct about the body but the shape
     is required by the dispatcher contract — removing ``async`` breaks
     every other handler's calling convention.
