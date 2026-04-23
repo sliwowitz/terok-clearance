@@ -52,7 +52,7 @@ class CommandDef:
 
 async def _handle_notify(*, summary: str, body: str = "", timeout: int = -1) -> None:
     """Send a one-shot desktop notification and print its ID."""
-    from terok_clearance import create_notifier  # tach-ignore
+    from terok_clearance.notifications.factory import create_notifier
 
     notifier = await create_notifier()
     try:
@@ -64,7 +64,7 @@ async def _handle_notify(*, summary: str, body: str = "", timeout: int = -1) -> 
 
 async def _handle_serve() -> None:
     """Run the clearance hub service until SIGINT/SIGTERM."""
-    from terok_clearance._hub import serve  # tach-ignore
+    from terok_clearance.hub.server import serve
 
     await serve()
 
@@ -82,7 +82,7 @@ async def _handle_install_service(*, bin_path: str | None = None) -> None:  # NO
     import sys
     from pathlib import Path as _Path
 
-    from terok_clearance._install import install_service  # tach-ignore
+    from terok_clearance.runtime.installer import install_service
 
     if bin_path is not None and not bin_path:
         raise SystemExit("install-service: --bin-path cannot be empty")
@@ -90,7 +90,7 @@ async def _handle_install_service(*, bin_path: str | None = None) -> None:  # NO
     resolved: _Path | list[str] = (
         _Path(discovered)
         if discovered is not None
-        else [sys.executable, "-m", "terok_clearance._cli"]
+        else [sys.executable, "-m", "terok_clearance.cli.main"]
     )
     dest = install_service(resolved)
     print(f"Installed {dest}")  # noqa: T201
@@ -104,7 +104,7 @@ async def _handle_install_service(*, bin_path: str | None = None) -> None:  # NO
 
 async def _handle_clearance() -> None:
     """Run the interactive terminal clearance tool."""
-    from terok_clearance._clearance import run_clearance  # tach-ignore
+    from terok_clearance.cli.terminal_clearance import run_clearance
 
     await run_clearance()
 

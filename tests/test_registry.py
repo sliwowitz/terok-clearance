@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from terok_clearance._registry import COMMANDS, CommandDef, _handle_notify, _handle_serve
+from terok_clearance.cli.registry import COMMANDS, CommandDef, _handle_notify, _handle_serve
 
 
 class TestCommandRegistry:
@@ -54,7 +54,9 @@ class TestHandleNotify:
         mock_notifier = AsyncMock()
         mock_notifier.notify.return_value = 7
 
-        with patch("terok_clearance.create_notifier", new_callable=AsyncMock) as mock_factory:
+        with patch(
+            "terok_clearance.notifications.factory.create_notifier", new_callable=AsyncMock
+        ) as mock_factory:
             mock_factory.return_value = mock_notifier
             await _handle_notify(summary="Alpha", body="Beta", timeout=5000)
 
@@ -66,7 +68,9 @@ class TestHandleNotify:
         mock_notifier = AsyncMock()
         mock_notifier.notify.side_effect = RuntimeError("boom")
 
-        with patch("terok_clearance.create_notifier", new_callable=AsyncMock) as mock_factory:
+        with patch(
+            "terok_clearance.notifications.factory.create_notifier", new_callable=AsyncMock
+        ) as mock_factory:
             mock_factory.return_value = mock_notifier
             with pytest.raises(RuntimeError, match="boom"):
                 await _handle_notify(summary="Fail")
@@ -77,7 +81,9 @@ class TestHandleNotify:
         mock_notifier = AsyncMock()
         mock_notifier.notify.return_value = 0
 
-        with patch("terok_clearance.create_notifier", new_callable=AsyncMock) as mock_factory:
+        with patch(
+            "terok_clearance.notifications.factory.create_notifier", new_callable=AsyncMock
+        ) as mock_factory:
             mock_factory.return_value = mock_notifier
             await _handle_notify(summary="Title")
 
@@ -88,6 +94,6 @@ class TestHandleServe:
     """The serve handler delegates to ``_hub.serve`` (bootstraps its own logging)."""
 
     async def test_awaits_serve(self) -> None:
-        with patch("terok_clearance._hub.serve", new_callable=AsyncMock) as serve:
+        with patch("terok_clearance.hub.server.serve", new_callable=AsyncMock) as serve:
             await _handle_serve()
         serve.assert_awaited_once()

@@ -7,15 +7,14 @@ from __future__ import annotations
 
 import pytest
 
-from terok_clearance._wire import (
-    CLEARANCE_INTERFACE_NAME,
-    Clearance1Interface,
-    ClearanceEvent,
+from terok_clearance.domain.events import ClearanceEvent
+from terok_clearance.wire.errors import (
     InvalidAction,
     ShieldCliFailed,
     UnknownRequest,
     VerdictTupleMismatch,
 )
+from terok_clearance.wire.interface import CLEARANCE_INTERFACE_NAME, Clearance1Interface
 
 
 class TestClearanceEvent:

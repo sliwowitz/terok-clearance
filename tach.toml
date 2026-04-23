@@ -12,134 +12,149 @@ exact = true
 forbid_circular_dependencies = true
 ignore_type_checking_imports = true
 
-# ── Module Boundaries ───────────────────────────────────────────────
+# ── Layered architecture ────────────────────────────────────────────
 #
-# Wire/protocol layer:
-#   _wire       — varlink interface + event/error types (asyncvarlink only)
-#   _event_ingester — reader→hub unix-socket listener (stdlib only)
+# Orthogonal to the feature-grouped directories.  Each leaf module
+# pins a layer; tach rejects any cross-layer dep that climbs the stack.
 #
-# Transport:
-#   _hub        — varlink server, reader ingestion, verdict exec
-#   _client     — varlink client, event callback relay
-#
-# Presentation:
-#   _subscriber — renders events via an injected Notifier
-#   _callback   — CallbackNotifier for programmatic consumers
-#   _notifier   — DbusNotifier (freedesktop.Notifications)
-#   _null       — NullNotifier headless fallback
-#
-# Leaf:
-#   _constants, _protocol, _identity
-#
-# Entry:
-#   _registry (CLI commands) → _cli
+# domain         — pure value types + invariants (zero internal deps)
+# wire           — varlink schema + unix-socket helpers (→ domain)
+# infrastructure — hub, client, notification backends, runtime (→ wire, domain)
+# interface      — cli, package public surface (→ anything below)
 
-# Package root — public re-exports from every internal module.
+[[layers]]
+name = "interface"
+
+[[layers]]
+name = "infrastructure"
+
+[[layers]]
+name = "wire"
+
+[[layers]]
+name = "domain"
+
+
+# ── Package root ────────────────────────────────────────────────────
+# Public re-exports from every feature sub-package.
+
 [[modules]]
 path = "terok_clearance"
+layer = "interface"
 depends_on = [
-    { path = "terok_clearance._callback" },
-    { path = "terok_clearance._client" },
-    { path = "terok_clearance._hub" },
-    { path = "terok_clearance._identity" },
-    { path = "terok_clearance._install" },
-    { path = "terok_clearance._notifier" },
-    { path = "terok_clearance._null" },
-    { path = "terok_clearance._protocol" },
-    { path = "terok_clearance._service" },
-    { path = "terok_clearance._subscriber" },
-    { path = "terok_clearance._wire" },
 ]
 
-# Leaf modules — zero internal deps.
+
+# ── Domain layer ────────────────────────────────────────────────────
+
 [[modules]]
-path = "terok_clearance._constants"
+path = "terok_clearance.domain.events"
+layer = "domain"
 depends_on = []
 
 [[modules]]
-path = "terok_clearance._protocol"
+path = "terok_clearance.domain.identity"
+layer = "domain"
+depends_on = []
+
+
+# ── Wire layer ──────────────────────────────────────────────────────
+
+[[modules]]
+path = "terok_clearance.wire.socket"
+layer = "wire"
 depends_on = []
 
 [[modules]]
-path = "terok_clearance._null"
+path = "terok_clearance.wire.interface"
+layer = "wire"
 depends_on = []
 
 [[modules]]
-path = "terok_clearance._identity"
+path = "terok_clearance.wire.errors"
+layer = "wire"
+depends_on = ["terok_clearance.wire.interface"]
+
+
+# ── Infrastructure layer ────────────────────────────────────────────
+
+# Notifications — Notifier protocol sits at the domain edge of the
+# notification tree; the three concrete backends are infrastructure.
+[[modules]]
+path = "terok_clearance.notifications.protocol"
+layer = "domain"
 depends_on = []
 
 [[modules]]
-path = "terok_clearance._event_ingester"
-depends_on = [{ path = "terok_clearance._unix_socket" }]
-
-# Socket-hardening helpers shared by the ingester + clearance hub.
-[[modules]]
-path = "terok_clearance._unix_socket"
+path = "terok_clearance.notifications.null"
+layer = "infrastructure"
 depends_on = []
 
-# Long-running asyncio service helpers (logging + shutdown-signal wait).
 [[modules]]
-path = "terok_clearance._service"
+path = "terok_clearance.notifications.callback"
+layer = "infrastructure"
 depends_on = []
 
-# Varlink interface + typed events/errors.
 [[modules]]
-path = "terok_clearance._wire"
-depends_on = [{ path = "terok_clearance._unix_socket" }]
-
-# DbusNotifier — freedesktop.Notifications over D-Bus.
-[[modules]]
-path = "terok_clearance._notifier"
-depends_on = [{ path = "terok_clearance._constants" }]
-
-# CallbackNotifier — programmatic consumer shim.
-[[modules]]
-path = "terok_clearance._callback"
+path = "terok_clearance.notifications.desktop"
+layer = "infrastructure"
 depends_on = []
 
-# Clearance hub — varlink server + reader ingestion + shield exec.
+# Hub — varlink server + reader ingestion + shield exec.
 [[modules]]
-path = "terok_clearance._hub"
+path = "terok_clearance.hub.ingester"
+layer = "infrastructure"
+depends_on = []
+
+[[modules]]
+path = "terok_clearance.hub.server"
+layer = "infrastructure"
 depends_on = [
-    { path = "terok_clearance._event_ingester" },
-    { path = "terok_clearance._service" },
-    { path = "terok_clearance._unix_socket" },
-    { path = "terok_clearance._wire" },
+    "terok_clearance.hub.ingester", "terok_clearance.runtime.service",
 ]
 
-# Clearance client — varlink consumer library.
+# Client — varlink consumer library.
 [[modules]]
-path = "terok_clearance._client"
-depends_on = [{ path = "terok_clearance._wire" }]
-
-# Event subscriber — renders events via an injected Notifier.
-[[modules]]
-path = "terok_clearance._subscriber"
+path = "terok_clearance.client.client"
+layer = "infrastructure"
 depends_on = [
-    { path = "terok_clearance._client" },
-    { path = "terok_clearance._identity" },
-    { path = "terok_clearance._wire" },
 ]
 
-# Terminal clearance tool (uses EventSubscriber + CallbackNotifier).
 [[modules]]
-path = "terok_clearance._clearance"
+path = "terok_clearance.client.subscriber"
+layer = "infrastructure"
 depends_on = [
-    { path = "terok_clearance._callback" },
-    { path = "terok_clearance._subscriber" },
+    "terok_clearance.client.client",
+    # notifications.protocol is only referenced under TYPE_CHECKING —
+    # tach.ignore_type_checking_imports skips it, so it's not in deps.
 ]
 
-# Command registry (consumed by CLI and terok integration layer)
+# Runtime — deployment helpers.
 [[modules]]
-path = "terok_clearance._registry"
+path = "terok_clearance.runtime.service"
+layer = "infrastructure"
 depends_on = []
 
-# CLI entry point
 [[modules]]
-path = "terok_clearance._cli"
-depends_on = [{ path = "terok_clearance._registry" }]
-
-# Systemd unit installer
-[[modules]]
-path = "terok_clearance._install"
+path = "terok_clearance.runtime.installer"
+layer = "infrastructure"
 depends_on = []
+
+
+# ── Interface layer ─────────────────────────────────────────────────
+
+[[modules]]
+path = "terok_clearance.cli.main"
+layer = "interface"
+depends_on = ["terok_clearance.cli.registry"]
+
+[[modules]]
+path = "terok_clearance.cli.registry"
+layer = "interface"
+depends_on = ["terok_clearance", "terok_clearance.cli.terminal_clearance"]
+
+[[modules]]
+path = "terok_clearance.cli.terminal_clearance"
+layer = "interface"
+depends_on = [
+]

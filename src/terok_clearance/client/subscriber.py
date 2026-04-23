@@ -22,12 +22,12 @@ from typing import TYPE_CHECKING, Any
 
 from dbus_fast import Variant
 
-from terok_clearance._client import ClearanceClient
-from terok_clearance._identity import ContainerIdentity
-from terok_clearance._wire import ClearanceEvent
+from terok_clearance.client.client import ClearanceClient
+from terok_clearance.domain.events import ClearanceEvent
+from terok_clearance.domain.identity import ContainerIdentity
 
 if TYPE_CHECKING:
-    from terok_clearance._protocol import Notifier
+    from terok_clearance.notifications.protocol import Notifier
 
 _log = logging.getLogger(__name__)
 

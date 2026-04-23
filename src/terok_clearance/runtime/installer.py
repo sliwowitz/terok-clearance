@@ -42,7 +42,7 @@ def install_service(bin_path: Path | list[str]) -> Path:
             (a single executable, space-tolerant — e.g. from
             ``shutil.which("terok-clearance-hub")``) or a ``list[str]`` argv
             (the module-fallback form, e.g.
-            ``[sys.executable, "-m", "terok_clearance._cli"]``).  Each token
+            ``[sys.executable, "-m", "terok_clearance.cli.main"]``).  Each token
             is quoted individually on render so systemd's whitespace
             tokeniser sees the intended argv boundaries regardless of
             spaces inside any element.

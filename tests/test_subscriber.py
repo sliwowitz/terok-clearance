@@ -17,15 +17,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from terok_clearance._identity import ContainerIdentity
-from terok_clearance._subscriber import (
+from terok_clearance.client.subscriber import (
     _HINT_BLOCK_PENDING,
     _HINT_CONFIRMATION,
     _HINT_LIFECYCLE,
     _HINT_SECURITY_ALERT,
     EventSubscriber,
 )
-from terok_clearance._wire import ClearanceEvent
+from terok_clearance.domain.events import ClearanceEvent
+from terok_clearance.domain.identity import ContainerIdentity
 
 from .conftest import CONTAINER, DEST_IP, DOMAIN
 

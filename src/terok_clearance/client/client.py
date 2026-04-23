@@ -26,7 +26,9 @@ from pathlib import Path
 from asyncvarlink import VarlinkClientProtocol, connect_unix_varlink
 from asyncvarlink.error import VarlinkErrorReply
 
-from terok_clearance._wire import Clearance1Interface, ClearanceEvent, default_clearance_socket_path
+from terok_clearance.domain.events import ClearanceEvent
+from terok_clearance.wire.interface import Clearance1Interface
+from terok_clearance.wire.socket import default_clearance_socket_path
 
 _log = logging.getLogger(__name__)
 

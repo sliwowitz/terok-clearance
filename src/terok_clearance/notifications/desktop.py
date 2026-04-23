@@ -6,18 +6,41 @@
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from enum import IntEnum
 from pathlib import Path
 from typing import Any
 
 from dbus_fast.aio import MessageBus
 
-from terok_clearance._constants import BUS_NAME, INTERFACE_NAME, OBJECT_PATH
+#: Addressing for the freedesktop Notifications service.  Kept private to
+#: this module — the Notifier protocol is the abstraction consumers should
+#: use; exposing these invites re-implementing the spec.
+BUS_NAME = "org.freedesktop.Notifications"
+OBJECT_PATH = "/org/freedesktop/Notifications"
+INTERFACE_NAME = "org.freedesktop.Notifications"
+
+
+class CloseReason(IntEnum):
+    """Reason a notification was closed, per the freedesktop spec."""
+
+    EXPIRED = 1
+    """The notification expired (timed out)."""
+
+    DISMISSED = 2
+    """The notification was dismissed by the user."""
+
+    CLOSED = 3
+    """The notification was closed via ``CloseNotification``."""
+
+    UNDEFINED = 4
+    """The notification server did not provide a reason."""
+
 
 # ``Path(__file__)`` can be relative under editable installs or alternative
 # loaders; ``resolve()`` before ``as_uri()`` because the latter rejects
 # relative paths with a ValueError that would fire at import time and
 # prevent the module from loading at all.
-_LOGO_PATH = Path(__file__).resolve().parent / "resources" / "terok-logo.png"
+_LOGO_PATH = Path(__file__).resolve().parent.parent / "resources" / "terok-logo.png"
 
 #: ``file://`` URI of the bundled terok logo.  Freedesktop daemons render a
 #: PNG passed as ``app_icon`` alongside summary + body; this gives every
@@ -115,7 +138,7 @@ class DbusNotifier:
         terok task triple) are dropped on the floor here — callers are
         expected to have folded the user-facing identity into ``body``
         already.  The kwargs stay in the signature for
-        :class:`~terok_clearance._protocol.Notifier` conformance so callers
+        :class:`~terok_clearance.notifications.protocol.Notifier` conformance so callers
         don't have to branch on notifier kind.
         """
         await self.connect()

@@ -32,16 +32,16 @@ from pathlib import Path
 from asyncvarlink import VarlinkInterfaceRegistry, create_unix_server
 from asyncvarlink.serviceinterface import VarlinkServiceInterface
 
-from terok_clearance._event_ingester import EventIngester
-from terok_clearance._wire import (
-    Clearance1Interface,
-    ClearanceEvent,
+from terok_clearance.domain.events import ClearanceEvent
+from terok_clearance.hub.ingester import EventIngester
+from terok_clearance.wire.errors import (
     InvalidAction,
     ShieldCliFailed,
     UnknownRequest,
     VerdictTupleMismatch,
-    default_clearance_socket_path,
 )
+from terok_clearance.wire.interface import Clearance1Interface
+from terok_clearance.wire.socket import default_clearance_socket_path
 
 _log = logging.getLogger(__name__)
 
@@ -151,7 +151,7 @@ class ClearanceHub:
                 )
             )
 
-            from terok_clearance._unix_socket import bind_hardened
+            from terok_clearance.wire.socket import bind_hardened
 
             async def _factory(path: str) -> object:
                 return await create_unix_server(registry.protocol_factory, path=path)
@@ -432,7 +432,7 @@ def _own_version() -> str:
 
 def _default_reader_socket() -> Path:
     """The EventIngester's default path, re-derived for the hub's wiring."""
-    from terok_clearance._event_ingester import default_socket_path
+    from terok_clearance.hub.ingester import default_socket_path
 
     return default_socket_path()
 
@@ -447,7 +447,7 @@ async def serve() -> None:  # pragma: no cover — integration path
     on a signal-set :class:`asyncio.Event`; systemd's SIGTERM flips it,
     then :meth:`stop` tears down the server under a timeout.
     """
-    from terok_clearance._service import configure_logging, wait_for_shutdown_signal
+    from terok_clearance.runtime.service import configure_logging, wait_for_shutdown_signal
 
     configure_logging()
     hub = ClearanceHub()

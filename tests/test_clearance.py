@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from terok_clearance._callback import Notification
-from terok_clearance._clearance import _TerminalClearance, run_clearance
-from terok_clearance._registry import COMMANDS
+from terok_clearance.cli.registry import COMMANDS
+from terok_clearance.cli.terminal_clearance import _TerminalClearance, run_clearance
+from terok_clearance.notifications.callback import Notification
 
 
 def _make_notification(**overrides: object) -> Notification:
@@ -236,7 +236,9 @@ class TestRunLifecycle:
         fake_stdin = io.StringIO("q\n")
 
         with (
-            patch("terok_clearance._subscriber.EventSubscriber", return_value=mock_subscriber),
+            patch(
+                "terok_clearance.client.subscriber.EventSubscriber", return_value=mock_subscriber
+            ),
             patch.object(sys, "stdin", fake_stdin),
         ):
             await tc.run()
@@ -254,7 +256,9 @@ class TestRunLifecycle:
         fake_stdin = io.StringIO("")  # immediate EOF
 
         with (
-            patch("terok_clearance._subscriber.EventSubscriber", return_value=mock_subscriber),
+            patch(
+                "terok_clearance.client.subscriber.EventSubscriber", return_value=mock_subscriber
+            ),
             patch.object(sys, "stdin", fake_stdin),
         ):
             await tc.run()
@@ -268,7 +272,9 @@ class TestRunLifecycle:
         mock_subscriber.start.side_effect = OSError("no hub socket")
 
         with (
-            patch("terok_clearance._subscriber.EventSubscriber", return_value=mock_subscriber),
+            patch(
+                "terok_clearance.client.subscriber.EventSubscriber", return_value=mock_subscriber
+            ),
             pytest.raises(SystemExit) as exc_info,
         ):
             await tc.run()
@@ -282,7 +288,9 @@ class TestRunLifecycle:
         fake_stdin = io.StringIO("q\n")
 
         with (
-            patch("terok_clearance._subscriber.EventSubscriber", return_value=mock_subscriber),
+            patch(
+                "terok_clearance.client.subscriber.EventSubscriber", return_value=mock_subscriber
+            ),
             patch.object(sys, "stdin", fake_stdin),
         ):
             await run_clearance()

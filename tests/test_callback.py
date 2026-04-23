@@ -7,8 +7,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from terok_clearance._callback import CallbackNotifier, Notification
-from terok_clearance._protocol import Notifier
+from terok_clearance.notifications.callback import CallbackNotifier, Notification
+from terok_clearance.notifications.protocol import Notifier
 
 
 @pytest.fixture

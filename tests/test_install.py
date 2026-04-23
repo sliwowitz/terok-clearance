@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 import pytest
 
-from terok_clearance import _install
-from terok_clearance._install import (
+from terok_clearance.runtime import installer as _install
+from terok_clearance.runtime.installer import (
     UNIT_NAME,
     check_units_outdated,
     install_service,
@@ -68,9 +68,9 @@ class TestRenderExecStart:
 
     def test_argv_list_quotes_each_token_individually(self) -> None:
         rendered = _install._render_exec_start(
-            [Path("/home/me/My Py/python"), "-m", "terok_clearance._cli"]
+            [Path("/home/me/My Py/python"), "-m", "terok_clearance.cli.main"]
         )
-        assert rendered == '"/home/me/My Py/python" -m terok_clearance._cli'
+        assert rendered == '"/home/me/My Py/python" -m terok_clearance.cli.main'
 
     def test_control_characters_are_refused(self) -> None:
         with pytest.raises(ValueError):

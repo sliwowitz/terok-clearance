@@ -13,7 +13,8 @@
 # Install:
 #   terok-clearance-hub install-service
 #   — or manually —
-#   sed "s|{{BIN}}|$(which terok-clearance-hub)|" contrib/systemd/terok-dbus.service \
+#   sed "s|{{BIN}}|$(which terok-clearance-hub)|" \
+#       src/terok_clearance/resources/systemd/terok-dbus.service \
 #       > ~/.config/systemd/user/terok-dbus.service
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now terok-dbus

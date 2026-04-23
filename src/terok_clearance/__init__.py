@@ -16,29 +16,26 @@ Two unrelated wire formats live under this one package:
   varlink transport.
 """
 
-import logging
-
-from dbus_fast import DBusError
-
-from terok_clearance._callback import CallbackNotifier, Notification
-from terok_clearance._client import ClearanceClient
-from terok_clearance._hub import ClearanceHub, default_clearance_socket_path, serve
-from terok_clearance._identity import ContainerIdentity
-from terok_clearance._install import check_units_outdated, read_installed_unit_version
-from terok_clearance._notifier import DbusNotifier
-from terok_clearance._null import NullNotifier
-from terok_clearance._protocol import Notifier
-from terok_clearance._service import configure_logging, wait_for_shutdown_signal
-from terok_clearance._subscriber import EventSubscriber
-from terok_clearance._wire import (
-    CLEARANCE_INTERFACE_NAME,
-    Clearance1Interface,
-    ClearanceEvent,
+from terok_clearance.client.client import ClearanceClient
+from terok_clearance.client.subscriber import EventSubscriber
+from terok_clearance.domain.events import ClearanceEvent
+from terok_clearance.domain.identity import ContainerIdentity
+from terok_clearance.hub.server import ClearanceHub, serve
+from terok_clearance.notifications.callback import CallbackNotifier, Notification
+from terok_clearance.notifications.desktop import DbusNotifier
+from terok_clearance.notifications.factory import create_notifier
+from terok_clearance.notifications.null import NullNotifier
+from terok_clearance.notifications.protocol import Notifier
+from terok_clearance.runtime.installer import check_units_outdated, read_installed_unit_version
+from terok_clearance.runtime.service import configure_logging, wait_for_shutdown_signal
+from terok_clearance.wire.errors import (
     InvalidAction,
     ShieldCliFailed,
     UnknownRequest,
     VerdictTupleMismatch,
 )
+from terok_clearance.wire.interface import CLEARANCE_INTERFACE_NAME, Clearance1Interface
+from terok_clearance.wire.socket import default_clearance_socket_path
 
 __all__ = [
     "CLEARANCE_INTERFACE_NAME",
@@ -67,28 +64,3 @@ __all__ = [
 ]
 
 __version__ = "0.0.0"
-
-_log = logging.getLogger(__name__)
-
-
-async def create_notifier(app_name: str = "terok") -> Notifier:
-    """Return a connected ``DbusNotifier``, or a ``NullNotifier`` on failure.
-
-    Thin convenience wrapper — calls :meth:`DbusNotifier.connect` and
-    falls through to :class:`NullNotifier` if no session bus is
-    reachable.  Unrelated to the clearance varlink transport; this one
-    is about desktop popups.
-
-    Args:
-        app_name: Application name sent with every notification.
-
-    Returns:
-        A ``Notifier``-compatible instance.
-    """
-    notifier = DbusNotifier(app_name)
-    try:
-        await notifier.connect()
-    except (OSError, DBusError, ValueError) as exc:
-        _log.debug("D-Bus session bus unavailable, falling back to NullNotifier: %s", exc)
-        return NullNotifier()
-    return notifier

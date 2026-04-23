@@ -22,11 +22,22 @@ from typing import Any
 #: chmod it down.
 _BIND_UMASK = 0o177
 
+#: Canonical clearance-socket basename under ``$XDG_RUNTIME_DIR``.  Lives
+#: with the socket helpers because both identify where to connect on the
+#: wire — the interface name (the varlink-level namespace) lives next
+#: door in ``wire.interface``.
+_CLEARANCE_SOCKET_BASENAME = "terok-clearance.sock"
+
 
 def runtime_socket_path(basename: str) -> Path:
     """Return ``$XDG_RUNTIME_DIR/<basename>`` with a ``/run/user/<uid>`` fallback."""
     xdg = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
     return Path(xdg) / basename
+
+
+def default_clearance_socket_path() -> Path:
+    """Return the canonical clearance-socket path under ``$XDG_RUNTIME_DIR``."""
+    return runtime_socket_path(_CLEARANCE_SOCKET_BASENAME)
 
 
 def ensure_private_parent(path: Path, label: str) -> None:

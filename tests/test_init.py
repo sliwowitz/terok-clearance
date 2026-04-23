@@ -55,7 +55,7 @@ class TestCreateNotifier:
         proxy.get_interface.return_value = MagicMock()
         mock_bus.get_proxy_object.return_value = proxy
 
-        with patch("terok_clearance._notifier.MessageBus", return_value=mock_bus):
+        with patch("terok_clearance.notifications.desktop.MessageBus", return_value=mock_bus):
             notifier = await create_notifier("test")
             assert isinstance(notifier, DbusNotifier)
 
@@ -63,13 +63,13 @@ class TestCreateNotifier:
         mock_bus = MagicMock()
         mock_bus.connect = AsyncMock(side_effect=OSError("no bus"))
 
-        with patch("terok_clearance._notifier.MessageBus", return_value=mock_bus):
+        with patch("terok_clearance.notifications.desktop.MessageBus", return_value=mock_bus):
             notifier = await create_notifier()
             assert isinstance(notifier, NullNotifier)
 
     async def test_returns_null_notifier_on_invalid_address(self):
         with patch(
-            "terok_clearance._notifier.MessageBus",
+            "terok_clearance.notifications.desktop.MessageBus",
             side_effect=ValueError("could not open dbus info file"),
         ):
             notifier = await create_notifier()

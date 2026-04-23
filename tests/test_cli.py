@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from terok_clearance._cli import _build_parser, main
-from terok_clearance._registry import COMMANDS, CommandDef
+from terok_clearance.cli.main import _build_parser, main
+from terok_clearance.cli.registry import COMMANDS, CommandDef
 
 
 class TestNotifyParser:
@@ -74,7 +74,7 @@ class TestInstallServiceDispatch:
             unit_path.write_text(f"ExecStart={bin_path}\n")
             return unit_path
 
-        monkeypatch.setattr("terok_clearance._install.install_service", _fake_install)
+        monkeypatch.setattr("terok_clearance.runtime.installer.install_service", _fake_install)
         monkeypatch.setattr("shutil.which", lambda _name: "/opt/terok-clearance")
         with patch("sys.argv", ["terok-clearance", "install-service"]):
             main()
@@ -87,7 +87,7 @@ class TestInstallServiceDispatch:
             seen["bin_path"] = str(bin_path)
             return tmp_path / "terok-dbus.service"
 
-        monkeypatch.setattr("terok_clearance._install.install_service", _fake_install)
+        monkeypatch.setattr("terok_clearance.runtime.installer.install_service", _fake_install)
         with patch("sys.argv", ["terok-clearance", "install-service", "--bin-path", "/custom/bin"]):
             main()
         assert seen["bin_path"] == "/custom/bin"
@@ -98,7 +98,7 @@ class TestInstallServiceDispatch:
         def _fake_install(bin_path):
             raise AssertionError("install_service must not be called on empty --bin-path")
 
-        monkeypatch.setattr("terok_clearance._install.install_service", _fake_install)
+        monkeypatch.setattr("terok_clearance.runtime.installer.install_service", _fake_install)
         with (
             patch("sys.argv", ["terok-clearance", "install-service", "--bin-path", ""]),
             pytest.raises(SystemExit),
@@ -123,7 +123,9 @@ class TestNotifyDispatch:
         mock_notifier.notify.return_value = 42
 
         with (
-            patch("terok_clearance.create_notifier", new_callable=AsyncMock) as mock_factory,
+            patch(
+                "terok_clearance.notifications.factory.create_notifier", new_callable=AsyncMock
+            ) as mock_factory,
             patch("sys.argv", ["terok-clearance", "notify", "Test", "Body"]),
         ):
             mock_factory.return_value = mock_notifier
@@ -145,7 +147,7 @@ class TestKeyboardInterrupt:
         )
 
         with (
-            patch("terok_clearance._cli.COMMANDS", mock_commands),
+            patch("terok_clearance.cli.main.COMMANDS", mock_commands),
             patch("sys.argv", ["terok-clearance", "notify", "Hi"]),
         ):
             with pytest.raises(SystemExit, match="130"):
@@ -163,7 +165,7 @@ class TestServeDispatch:
         )
 
         with (
-            patch("terok_clearance._cli.COMMANDS", mock_commands),
+            patch("terok_clearance.cli.main.COMMANDS", mock_commands),
             patch("sys.argv", ["terok-clearance", "serve"]),
         ):
             main()
