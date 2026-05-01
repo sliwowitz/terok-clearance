@@ -43,15 +43,46 @@ ExecStart={{BIN}}
 Restart=on-failure
 RestartSec=5
 
+# Hardening — mirrors the hub's profile.  The notifier is the
+# operator-UI-facing process that crosses adversarial container input
+# (block-event payloads under attacker influence) into the gnome-shell
+# session bus, so it deserves the same lockdown as the hub itself.
+# ``ProtectHome=tmpfs`` masks the operator's home directory wholesale;
+# the only ``%h`` path the notifier needs (its own venv) is
+# bind-mounted back read-only.  Without that one bind, the notifier
+# can't import its own Python.
 NoNewPrivileges=yes
+AmbientCapabilities=
 LockPersonality=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
+RestrictNamespaces=yes
 SystemCallArchitectures=native
 KeyringMode=private
 UMask=0077
-IPAddressDeny=any
+
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=tmpfs
+BindReadOnlyPaths=-%h/.local/share/pipx/venvs/terok
+
 RestrictAddressFamilies=AF_UNIX
+SystemCallFilter=@system-service
+SystemCallFilter=~@resources @privileged
+MemoryDenyWriteExecute=yes
+PrivateNetwork=yes
+IPAddressDeny=any
+
 
 [Install]
 WantedBy=default.target

@@ -78,13 +78,27 @@ stays untouched so notifier-only edits don't falsely report hub/verdict
 as stale, and vice versa.
 """
 
-_NOTIFIER_UNIT_VERSION = 1
+_NOTIFIER_UNIT_VERSION = 2
 """Version stamp for the standalone notifier unit.
 
 Kept independent of the hub/verdict pair so each install target can
 evolve on its own cadence — the three units ship different ExecStart
 shapes, different hardening profiles, and different dependencies on
 the session bus.
+
+Version history:
+    2 — full hub-style hardening profile (ProtectClock,
+        Protect{Kernel*,Hostname,Proc}, ProcSubset, PrivateDevices,
+        PrivateTmp, PrivateNetwork, ProtectSystem=full, ProtectHome=tmpfs,
+        BindReadOnlyPaths for the venv, MemoryDenyWriteExecute,
+        SystemCallFilter, RestrictNamespaces).  Identity resolution
+        moved to the shield reader (per-event dossier), so the notifier
+        no longer forks ``podman inspect`` and can take all the
+        namespace/seccomp directives the hub already has.
+    1 — initial profile with the directives that don't break podman
+        inspect (NoNewPrivileges, LockPersonality, RestrictRealtime,
+        RestrictSUIDSGID, SystemCallArchitectures, KeyringMode, UMask,
+        IPAddressDeny, RestrictAddressFamilies=AF_UNIX).
 """
 
 # Backwards-compatible alias — the unit name the legacy installer
