@@ -78,13 +78,36 @@ stays untouched so notifier-only edits don't falsely report hub/verdict
 as stale, and vice versa.
 """
 
-_NOTIFIER_UNIT_VERSION = 1
+_NOTIFIER_UNIT_VERSION = 3
 """Version stamp for the standalone notifier unit.
 
 Kept independent of the hub/verdict pair so each install target can
 evolve on its own cadence — the three units ship different ExecStart
 shapes, different hardening profiles, and different dependencies on
 the session bus.
+
+Version history:
+    3 — ``ProtectHome=tmpfs`` + ``BindReadOnlyPaths=%h/.../pipx/...``
+        replaced with the simpler ``ProtectHome=read-only``.  On
+        Fedora-Atomic-style hosts (``/home`` symlinked to
+        ``/var/home``) the tmpfs+bind combo cooperated badly with
+        systemd's ``%h`` resolution and the notifier could end up
+        with no importable Python at all — silently zero desktop
+        popups.  Read-only is threat-equivalent against the
+        gnome-shell markup-injection vector that hardening targets
+        and works regardless of the venv's actual on-disk path.
+    2 — full hub-style hardening profile (ProtectClock,
+        Protect{Kernel*,Hostname,Proc}, ProcSubset, PrivateDevices,
+        PrivateTmp, PrivateNetwork, ProtectSystem=full, ProtectHome=tmpfs,
+        BindReadOnlyPaths for the venv, MemoryDenyWriteExecute,
+        SystemCallFilter, RestrictNamespaces).  Identity resolution
+        moved to the shield reader (per-event dossier), so the notifier
+        no longer forks ``podman inspect`` and can take all the
+        namespace/seccomp directives the hub already has.
+    1 — initial profile with the directives that don't break podman
+        inspect (NoNewPrivileges, LockPersonality, RestrictRealtime,
+        RestrictSUIDSGID, SystemCallArchitectures, KeyringMode, UMask,
+        IPAddressDeny, RestrictAddressFamilies=AF_UNIX).
 """
 
 # Backwards-compatible alias — the unit name the legacy installer
@@ -295,6 +318,16 @@ def read_installed_unit_version() -> int | None:
     differentiates between those in its operator-facing message.
     """
     return _version_for(HUB_UNIT_NAME, _HUB[1])
+
+
+def read_installed_notifier_unit_version() -> int | None:
+    """Return the notifier unit's version stamp, or ``None`` if not installed.
+
+    Companion to [`read_installed_unit_version`][terok_clearance.runtime.installer.read_installed_unit_version] for callers
+    (e.g. ``terok sickbay``) that want to surface the two install
+    targets side-by-side rather than collapsing them into one stamp.
+    """
+    return _version_for(NOTIFIER_UNIT_NAME, _NOTIFIER[1])
 
 
 def _version_for(unit_name: str, marker_prefix: str) -> int | None:

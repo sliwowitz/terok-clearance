@@ -7,11 +7,48 @@ One flat dataclass carries every event kind the hub fans out to
 subscribers.  Varlink IDL can't model sum types directly, so the
 ``type`` field discriminates and the remaining fields are populated
 per-kind — the same pattern ``io.systemd.Resolve.Monitor`` uses.
+
+The orchestrator-supplied identity bundle that rides on each event —
+the [`Dossier`][terok_clearance.domain.events.Dossier] dict — is a
+free-form string-to-string map: the wire format treats it as opaque
+and the renderer only dereferences the small set of well-known keys
+named by the ``DOSSIER_*`` constants below.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+#: Type alias for the orchestrator-supplied identity bundle resolved
+#: by the shield reader at emit time.  Keys are the orchestrator's
+#: contract — terok publishes ``project``, ``task``, ``name``, etc.
+#: under the ``dossier.*`` OCI annotation namespace, but a non-terok
+#: orchestrator may publish anything.  An empty dossier is the
+#: shield-only-deployment shape; clients fall back to the bare
+#: ``container`` short-id in that case.
+Dossier = dict[str, str]
+
+#: Project identifier within the orchestrator's namespace.  Combined
+#: with ``DOSSIER_TASK`` to form the task triple shown in popup
+#: bodies.  Empty when the orchestrator doesn't model projects.
+DOSSIER_PROJECT = "project"
+
+#: Task identifier within ``DOSSIER_PROJECT``.  Both keys must be
+#: populated for the renderer to switch from a "Container: …" body
+#: to a "Task: project/task · name" body.
+DOSSIER_TASK = "task"
+
+#: Human-readable label for the task or container — whatever the
+#: orchestrator considers the friendly name.  For terok this tracks
+#: the in-flight task name (renamable; resolved on every emit from
+#: the meta-path JSON file).
+DOSSIER_NAME = "name"
+
+#: Container name as the runtime sees it.  Optional — in practice
+#: equal to ``DOSSIER_NAME`` for terok, but the orchestrator may
+#: set them separately (e.g. a stable container name plus a
+#: human-edited task name).
+DOSSIER_CONTAINER_NAME = "container_name"
 
 
 @dataclass
@@ -24,11 +61,11 @@ class ClearanceEvent:
     Known values of ``type`` (additional fields beyond ``container``):
 
     * ``connection_blocked`` — ``request_id``, ``dest``, ``port``,
-      ``proto``, ``domain``.  Requires an operator verdict.
+      ``proto``, ``domain``, ``dossier``.  Requires an operator verdict.
     * ``verdict_applied`` — ``request_id``, ``action``, ``ok``.
-    * ``container_started`` — no extras.
-    * ``container_exited`` — ``reason``.
-    * ``shield_up`` / ``shield_down`` / ``shield_down_all`` — no extras.
+    * ``container_started`` — ``dossier``.
+    * ``container_exited`` — ``reason``, ``dossier``.
+    * ``shield_up`` / ``shield_down`` / ``shield_down_all`` — ``dossier``.
 
     Unknown values are forwarded unchanged so the wire format can grow
     without breaking clients pinned to older schemas.
@@ -44,3 +81,4 @@ class ClearanceEvent:
     action: str = ""
     ok: bool = False
     reason: str = ""
+    dossier: Dossier = field(default_factory=dict)

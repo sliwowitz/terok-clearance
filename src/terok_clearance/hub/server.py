@@ -29,7 +29,7 @@ from pathlib import Path
 from asyncvarlink import VarlinkInterfaceRegistry, create_unix_server
 from asyncvarlink.serviceinterface import VarlinkServiceInterface
 
-from terok_clearance.domain.events import ClearanceEvent
+from terok_clearance.domain.events import ClearanceEvent, Dossier
 from terok_clearance.hub.ingester import EventIngester
 from terok_clearance.verdict.client import VerdictClient
 from terok_clearance.wire.errors import (
@@ -346,6 +346,7 @@ def _translate_reader_event(wire_type: str, raw: dict) -> ClearanceEvent:
     ``wire_type`` so each kind gets exactly the fields it needs.
     """
     container = str(raw["container"])
+    dossier = _coerce_dossier(raw.get("dossier"))
     if wire_type == "connection_blocked":
         return ClearanceEvent(
             type=wire_type,
@@ -355,14 +356,30 @@ def _translate_reader_event(wire_type: str, raw: dict) -> ClearanceEvent:
             port=int(raw["port"]),
             proto=int(raw["proto"]),
             domain=str(raw.get("domain", "")),
+            dossier=dossier,
         )
     if wire_type == "container_exited":
         return ClearanceEvent(
             type=wire_type,
             container=container,
             reason=str(raw.get("reason", "")),
+            dossier=dossier,
         )
-    return ClearanceEvent(type=wire_type, container=container)
+    return ClearanceEvent(type=wire_type, container=container, dossier=dossier)
+
+
+def _coerce_dossier(raw: object) -> Dossier:
+    """Pull a ``Dossier`` out of whatever the reader put on the wire.
+
+    A missing or non-object payload normalises to ``{}`` rather than crashing
+    the translator — the hub must absorb a misshaped event the same way it
+    drops malformed wire types.  Values are coerced via ``str()`` because the
+    upstream JSON allows numbers/bools/null and the renderer always wants
+    strings.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items()}
 
 
 def _own_version() -> str:

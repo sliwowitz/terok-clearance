@@ -13,9 +13,12 @@ import pytest
 from terok_clearance.runtime import installer as _install
 from terok_clearance.runtime.installer import (
     HUB_UNIT_NAME,
+    NOTIFIER_UNIT_NAME,
     VERDICT_UNIT_NAME,
     check_units_outdated,
+    install_notifier_service,
     install_service,
+    read_installed_notifier_unit_version,
     read_installed_unit,
     read_installed_unit_version,
 )
@@ -159,6 +162,36 @@ class TestUnitVersion:
         unit_path.parent.mkdir(parents=True)
         unit_path.write_text("[Unit]\nDescription=hand-rolled\n[Service]\nExecStart=/x serve\n")
         assert read_installed_unit_version() is None
+
+    def test_notifier_version_reads_independently_of_hub(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Notifier version reader returns ``None`` when only the hub pair is installed.
+
+        Sickbay surfaces both versions side-by-side; the per-unit
+        readers must never confuse one install target's drift signal
+        with the other.
+        """
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        with patch.object(_install, "_daemon_reload"):
+            install_service(Path("/a/terok-clearance-hub"))
+        assert read_installed_unit_version() == _install._PAIR_UNIT_VERSION
+        assert read_installed_notifier_unit_version() is None
+
+    def test_notifier_version_reflects_installed_unit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Once the notifier unit lands on disk its version matches the constant."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        with patch.object(_install, "_daemon_reload"):
+            install_notifier_service(Path("/a/terok-clearance-notifier"))
+        assert read_installed_notifier_unit_version() == _install._NOTIFIER_UNIT_VERSION
+        # The notifier unit file is the one that carries this version, not the hub.
+        notifier_text = (tmp_path / "systemd" / "user" / NOTIFIER_UNIT_NAME).read_text()
+        assert (
+            f"# terok-clearance-notifier-version: {_install._NOTIFIER_UNIT_VERSION}"
+            in notifier_text
+        )
 
     def test_check_outdated_silent_on_fresh_install(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
