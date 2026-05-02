@@ -52,6 +52,7 @@ from terok_clearance.notifications.protocol import Notifier
 from terok_clearance.runtime.installer import (
     check_units_outdated,
     install_notifier_service,
+    read_installed_notifier_unit_version,
     read_installed_unit_version,
     uninstall_notifier_service,
     uninstall_service,
@@ -87,6 +88,7 @@ __all__ = [
     "create_notifier",
     "default_clearance_socket_path",
     "install_notifier_service",
+    "read_installed_notifier_unit_version",
     "read_installed_unit_version",
     "serve",
     "uninstall_notifier_service",

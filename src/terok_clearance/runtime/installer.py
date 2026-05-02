@@ -320,6 +320,16 @@ def read_installed_unit_version() -> int | None:
     return _version_for(HUB_UNIT_NAME, _HUB[1])
 
 
+def read_installed_notifier_unit_version() -> int | None:
+    """Return the notifier unit's version stamp, or ``None`` if not installed.
+
+    Companion to [`read_installed_unit_version`][terok_clearance.runtime.installer.read_installed_unit_version] for callers
+    (e.g. ``terok sickbay``) that want to surface the two install
+    targets side-by-side rather than collapsing them into one stamp.
+    """
+    return _version_for(NOTIFIER_UNIT_NAME, _NOTIFIER[1])
+
+
 def _version_for(unit_name: str, marker_prefix: str) -> int | None:
     """Return the version stamp from a specific installed unit, or ``None``."""
     path = _user_systemd_dir() / unit_name

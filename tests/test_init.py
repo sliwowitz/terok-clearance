@@ -34,6 +34,7 @@ class TestPublicApi:
             "create_notifier",
             "default_clearance_socket_path",
             "install_notifier_service",
+            "read_installed_notifier_unit_version",
             "read_installed_unit_version",
             "serve",
             "uninstall_notifier_service",
