@@ -5,6 +5,7 @@
 
 import asyncio
 import logging
+import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
@@ -112,16 +113,76 @@ class CloseReason(IntEnum):
 # loaders; ``resolve()`` before ``as_uri()`` because the latter rejects
 # relative paths with a ValueError that would fire at import time and
 # prevent the module from loading at all.
-_LOGO_PATH = Path(__file__).resolve().parent.parent / "resources" / "terok-logo.png"
+_LOGO_PATH = Path(__file__).resolve().parent.parent / "resources" / "terok-logo.svg"
 
-#: ``file://`` URI of the bundled terok logo.  Freedesktop daemons render a
-#: PNG passed as ``app_icon`` alongside summary + body; this gives every
-#: clearance notification a consistent brand mark without requiring the
-#: operator to install a system icon theme.  Empty when the resource is
-#: missing (editable installs that skipped package-data copy, tests running
-#: against a checked-out source tree without the file) — callers fall
-#: through to no icon.
-_DEFAULT_APP_ICON = _LOGO_PATH.as_uri() if _LOGO_PATH.is_file() else ""
+#: Freedesktop icon-theme search path fragment — every dir on
+#: ``$XDG_DATA_DIRS`` (plus ``$XDG_DATA_HOME``) is joined with this to
+#: locate the system-installed symbolic icon.  Matches what ``terok
+#: setup`` writes (see ``terok-toolbox`` _desktop_entry.py).
+_SYMBOLIC_ICON_NAME = "terok-symbolic"
+_SYMBOLIC_ICON_REL = Path("icons/hicolor/symbolic/apps/terok-symbolic.svg")
+
+
+def _icon_theme_search_dirs() -> list[Path]:
+    """Return the XDG data dirs to walk when probing the icon theme.
+
+    Order: ``$XDG_DATA_HOME`` first (per spec), then each entry in
+    ``$XDG_DATA_DIRS``.  Defaults are the spec-mandated fallbacks
+    (``~/.local/share`` for the home; ``/usr/local/share:/usr/share``
+    for the system list).  Mirrors what every Freedesktop icon resolver
+    does — we don't need GTK for a static-path probe.
+    """
+    home = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    system = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
+    return [Path(home), *(Path(p) for p in system.split(":") if p)]
+
+
+#: Module-level cache for the resolved icon-theme entry.  Set on the
+#: first call that finds ``terok-symbolic`` under any XDG search dir;
+#: kept ``None`` while the entry is absent so post-startup ``terok
+#: setup`` is picked up at the next notification.  Once locked in,
+#: subsequent calls are an attribute load with zero syscalls — the
+#: dirs we'd otherwise probe might live on a slow / network mount.
+_RESOLVED_ICON_NAME: str | None = None
+
+
+def _default_app_icon() -> str:
+    """Resolve the icon to pass as ``app_icon`` for every notification.
+
+    Tries the system icon theme first: if ``terok setup`` (or a distro
+    package) has installed ``terok-symbolic`` under any of the XDG icon
+    paths, return the bare icon name and let the notification daemon
+    render it through the icon theme — which means it picks up the
+    user's symbolic-icon foreground colour (theme-adaptive).
+
+    Falls back to the bundled SVG as a ``file://`` URI when the
+    icon-theme entry is absent (clearance installed standalone, fresh
+    machine without ``terok setup`` yet).  The bundled SVG carries
+    a ``@media (prefers-color-scheme: dark)`` block so librsvg-rendered
+    notification daemons still adapt to OS theme even without the
+    icon-theme entry.
+
+    Returns an empty string when neither path resolves (the bundled
+    resource went missing — editable install that skipped package
+    data; tests against a half-built source tree).  Callers fall
+    through to no icon.
+
+    Caching: the happy path (icon-theme entry found) is memoised in
+    ``_RESOLVED_ICON_NAME`` after the first successful lookup, so
+    steady-state calls are free.  The miss case keeps re-resolving so
+    ``terok setup`` running after clearance starts is picked up on the
+    next notification — no daemon restart needed.
+    """
+    global _RESOLVED_ICON_NAME
+    if _RESOLVED_ICON_NAME is not None:
+        return _RESOLVED_ICON_NAME
+    for d in _icon_theme_search_dirs():
+        if (d / _SYMBOLIC_ICON_REL).is_file():
+            _RESOLVED_ICON_NAME = _SYMBOLIC_ICON_NAME
+            return _RESOLVED_ICON_NAME
+    if _LOGO_PATH.is_file():
+        return _LOGO_PATH.as_uri()
+    return ""
 
 
 @dataclass(frozen=True)
@@ -413,7 +474,7 @@ class DbusNotifier:
         return await self._conn.interface.call_notify(
             self._app_name,
             replaces_id,
-            app_icon or _DEFAULT_APP_ICON,
+            app_icon or _default_app_icon(),
             _pango_escape(summary),
             _pango_escape(body),
             actions_flat,
