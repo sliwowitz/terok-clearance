@@ -16,11 +16,11 @@ apply:
   firewall console.
 * **Operator UI (consumer) — open.**  Anything that subscribes to
   the hub's varlink stream and implements the
-  [`Notifier`][terok_clearance.Notifier] protocol on the verdict-routing side
-  is a valid UI: today the D-Bus desktop notifier
-  ([`DbusNotifier`][terok_clearance.DbusNotifier]), the standalone Textual
-  ``terok clearance`` app, and the embedded ``terok-tui`` screen all
-  ride on this seam.
+  [`Notifier`][terok_clearance.notifications.protocol.Notifier] protocol on
+  the verdict-routing side is a valid UI: today the D-Bus desktop notifier
+  ([`DbusNotifier`][terok_clearance.notifications.desktop.DbusNotifier]),
+  the standalone Textual ``terok clearance`` app, and the embedded
+  ``terok-tui`` screen all ride on this seam.
 
 Container-runtime inspection is no longer a clearance concern: the
 shield reader resolves the orchestrator-supplied dossier at emit
@@ -34,9 +34,9 @@ Two unrelated wire formats live under this one package as a result:
   ([`ClearanceClient`][terok_clearance.ClearanceClient], [`EventSubscriber`][terok_clearance.EventSubscriber]) that drive the
   per-container block / verdict / lifecycle flow.
 * ``org.freedesktop.Notifications`` over **D-Bus** — the
-  [`DbusNotifier`][terok_clearance.DbusNotifier] wrapper that renders those events as desktop
-  popups.  Kept because that's the OS API; the in-package transport
-  is varlink.
+  [`DbusNotifier`][terok_clearance.notifications.desktop.DbusNotifier]
+  wrapper that renders those events as desktop popups.  Kept because
+  that's the OS API; the in-package transport is varlink.
 """
 
 from terok_util import ArgDef, CommandDef
@@ -53,13 +53,10 @@ from terok_clearance.client.subscriber import (
     EventSubscriber,
 )
 from terok_clearance.commands import COMMANDS
-from terok_clearance.domain.events import VERDICT_ACTIONS, ClearanceEvent, VerdictAction
+from terok_clearance.domain.events import ClearanceEvent, VerdictAction
 from terok_clearance.hub.server import ClearanceHub, serve
 from terok_clearance.notifications.callback import CallbackNotifier, Notification
-from terok_clearance.notifications.desktop import DbusNotifier
 from terok_clearance.notifications.factory import create_notifier
-from terok_clearance.notifications.null import NullNotifier
-from terok_clearance.notifications.protocol import Notifier
 from terok_clearance.runtime.installer import (
     HUB_UNIT_NAME,
     NOTIFIER_UNIT_NAME,
@@ -71,13 +68,8 @@ from terok_clearance.runtime.installer import (
     uninstall_service,
 )
 from terok_clearance.runtime.service import configure_logging, wait_for_shutdown_signal
-from terok_clearance.wire.errors import (
-    InvalidAction,
-    ShieldCliFailed,
-    UnknownRequest,
-    VerdictTupleMismatch,
-)
-from terok_clearance.wire.interface import CLEARANCE_INTERFACE_NAME, Clearance1Interface
+from terok_clearance.wire.errors import InvalidAction, ShieldCliFailed, UnknownRequest
+from terok_clearance.wire.interface import CLEARANCE_INTERFACE_NAME
 from terok_clearance.wire.socket import default_clearance_socket_path
 
 __all__ = [
@@ -86,12 +78,10 @@ __all__ = [
     "CLEARANCE_INTERFACE_NAME",
     "COMMANDS",
     "CallbackNotifier",
-    "Clearance1Interface",
     "ClearanceClient",
     "ClearanceEvent",
     "ClearanceHub",
     "CommandDef",
-    "DbusNotifier",
     "EventSubscriber",
     "HUB_UNIT_NAME",
     "InvalidAction",
@@ -103,13 +93,9 @@ __all__ = [
     "NOTIFY_SHIELD_UP",
     "NOTIFY_VERDICT",
     "Notification",
-    "Notifier",
-    "NullNotifier",
     "ShieldCliFailed",
     "UnknownRequest",
-    "VERDICT_ACTIONS",
     "VerdictAction",
-    "VerdictTupleMismatch",
     "check_units_outdated",
     "configure_logging",
     "create_notifier",
