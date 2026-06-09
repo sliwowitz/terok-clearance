@@ -143,7 +143,10 @@ asyncio.run(main())
 ### CLI tool (development / testing)
 
 ```bash
-terok-clearance-notify "Title" "Body" --actions allow:Allow deny:Deny --wait
+terok-clearance-hub notify "Title" "Body"   # one-shot desktop notification
+terok-clearance-hub serve                   # run a clearance hub
+terok-clearance-hub serve-verdict           # run the verdict helper
+terok-clearance-hub clearance               # interactive terminal UI
 ```
 
 ## License
