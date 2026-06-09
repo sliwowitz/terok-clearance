@@ -109,4 +109,4 @@ dep; same-layer / cross-feature deps must be explicit in
 - **Graceful fallback**: `create_notifier()` returns `NullNotifier` when D-Bus is unavailable
 - **Minimal changes**: Make surgical, focused changes
 - **Existing tests**: Never remove or modify unrelated tests
-- **Dependencies**: Use Poetry; the only runtime dependency is `dbus-fast`
+- **Dependencies**: Use Poetry; runtime dependencies are `dbus-fast`, `asyncvarlink`, `pyyaml`, and `terok-util`

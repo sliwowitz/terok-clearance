@@ -71,18 +71,18 @@ daemon. Generated reports go under `reports/`.
 ### Module structure
 
 ```text
-_constants    — D-Bus bus name, object path, interface, close reason codes
-_protocol     — Notifier Protocol (PEP 544, runtime_checkable)
-_null         — NullNotifier (no-op fallback)
-_notifier     — DesktopNotifier (dbus-fast implementation)
-_cli          — terok-clearance-notify CLI (dev/testing tool)
-__init__      — public API + create_notifier() factory
+domain/             — ClearanceEvent, VerdictAction, Dossier (pure types)
+wire/               — varlink interface definitions, typed errors, socket helpers
+hub/                — ClearanceHub varlink server + event ingester
+verdict/            — VerdictServer / VerdictClient (applies verdicts via `terok-shield allow|deny`)
+client/             — ClearanceClient (varlink RPC), EventSubscriber, MultiSocketSubscriber
+notifications/      — Notifier protocol, D-Bus notifier, null fallback, create_notifier()
+runtime/            — shared serve() helpers for the standalone entry points
+cli/ + commands.py  — the `terok-clearance-hub` CLI registry
+__init__            — public API re-exports
 ```
 
-### Dependency rules (tach.toml)
+### Dependency rules
 
-```text
-_constants, _protocol, _null → no dependencies
-_notifier → depends on _constants only
-_cli → depends on terok_clearance (public API)
-```
+Module boundaries are enforced by tach — see the layer assignments in
+`tach.toml`.  The public API surface is the `__init__` re-export list.
