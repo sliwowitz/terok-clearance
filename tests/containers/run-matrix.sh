@@ -37,6 +37,8 @@ else
 fi
 
 # Target distros: name -> Containerfile suffix
+# ``alpine`` is the non-systemd slot (OpenRC/musl) — it proves the
+# varlink hub/verdict run with no systemd at all.  See terok-ai/terok#959, #1113.
 declare -A DISTROS=(
     [debian12]="debian12"
     [ubuntu2404]="ubuntu2404"
@@ -45,6 +47,7 @@ declare -A DISTROS=(
     [fedora43]="fedora43"
     [fedora44]="fedora44"
     [podman]="podman"
+    [alpine]="alpine"
 )
 
 # Non-root user baked into each Containerfile.
@@ -57,6 +60,7 @@ declare -A TEST_USERS=(
     [fedora43]="testrunner"
     [fedora44]="testrunner"
     [podman]="podman"
+    [alpine]="testrunner"
 )
 
 usage() {
@@ -137,6 +141,21 @@ run_tests() {
             # ── Prepare workspace (as root) ──
             cp -a $SOURCE_MOUNT $WORKSPACE_DIR
             chown -R $test_user:$test_user $WORKSPACE_DIR
+
+            # ── Non-systemd proof ──
+            # The alpine slot must run on a genuinely systemd-free host;
+            # fail loudly if a future base image regresses that.  Other
+            # slots just record their init system in the log.
+            echo \"--- init system: PID1=\$(cat /proc/1/comm 2>/dev/null || echo unknown) ---\"
+            if command -v systemctl >/dev/null 2>&1 || [ -d /run/systemd/system ]; then
+                echo \"systemd: present\"
+                if [ \"$name\" = alpine ]; then
+                    echo \"FATAL: 'alpine' is the non-systemd slot but systemd was detected\" >&2
+                    exit 1
+                fi
+            else
+                echo \"systemd: absent — non-systemd host confirmed\"
+            fi
 
             # ── Run everything as the test user ──
             su - $test_user -c '
