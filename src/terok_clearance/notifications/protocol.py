@@ -43,12 +43,15 @@ class Notifier(Protocol):
                 ``DbusNotifier``, ignored by ``NullNotifier``).
             replaces_id: Replace an existing notification in-place.
             app_icon: Icon name or ``file:///`` URI.
-            container_id: Presentation-layer hint: the 12-char podman
-                container ID the event refers to.  The desktop
+            container_id: The 12-char short container ID the event refers
+                to — ``ClearanceEvent.container``, and so the key to pass
+                back to the hub for mute calls.  The desktop
                 ``DbusNotifier`` ignores it; ``CallbackNotifier`` attaches
                 it to the [`Notification`][terok_clearance.notifications.callback.Notification] so
                 rich consumers can render it alongside the user-facing name.
-            container_name: Podman ``--name`` matching the ID.  Same
+            container_name: Display label for the container: the dossier's
+                ``container_name``, else its ``name`` (for terok, the task
+                name).  For humans only — it addresses nothing.  Same
                 propagation rules as ``container_id``.
             project: Terok project slug when the container is orchestrator-
                 managed (from the ``ai.terok.project`` annotation).  Empty

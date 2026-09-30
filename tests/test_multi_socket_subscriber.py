@@ -27,6 +27,8 @@ from terok_clearance.client.subscriber import (
     MultiSocketSubscriber,
 )
 
+from .conftest import CONTAINER_SHORT_ID, OTHER_SHORT_ID
+
 
 @pytest.fixture
 def stub_event_subscriber(
@@ -324,3 +326,95 @@ class TestDefaultSocketGlob:
 
         assert str(sock) in stub_event_subscriber
         assert str(stale_flat_socket) not in stub_event_subscriber
+
+
+class TestMute:
+    """Mute is addressed to one container's hub by its short id.
+
+    The supervisor lays sockets out as ``<runtime>/clearance/<short_id>/hub.sock``
+    and the hub's events carry the same short id, so one id finds the hub and
+    names the container inside it.
+    """
+
+    @staticmethod
+    def _hub_socket(root: Path, container_id: str) -> Path:
+        """Create ``<root>/<container_id>/hub.sock``, the supervisor's layout."""
+        directory = root / container_id
+        directory.mkdir()
+        return _write_socket(directory, "hub.sock")
+
+    @staticmethod
+    def _subscriber(root: Path) -> MultiSocketSubscriber:
+        """A fan-in subscriber over the supervisor layout under *root*."""
+        return MultiSocketSubscriber(MagicMock(), socket_glob=str(root / "*" / "hub.sock"))
+
+    async def test_mute_routes_to_the_matching_hub_by_short_id(
+        self, tmp_path: Path, stub_event_subscriber: dict[str, MagicMock]
+    ) -> None:
+        """The hub under the container's own directory is asked, keyed by that same id."""
+        target = self._hub_socket(tmp_path, CONTAINER_SHORT_ID)
+        other = self._hub_socket(tmp_path, OTHER_SHORT_ID)
+        sub = self._subscriber(tmp_path)
+        try:
+            await sub.start()
+            for path in (target, other):
+                stub_event_subscriber[str(path)].set_mute = AsyncMock(return_value=True)
+
+            assert await sub.set_mute(CONTAINER_SHORT_ID, True) is True
+        finally:
+            await sub.stop()
+
+        stub_event_subscriber[str(target)].set_mute.assert_awaited_once_with(
+            CONTAINER_SHORT_ID, True
+        )
+        stub_event_subscriber[str(other)].set_mute.assert_not_awaited()
+
+    async def test_mute_without_a_hub_is_unknown(
+        self, tmp_path: Path, stub_event_subscriber: dict[str, MagicMock]
+    ) -> None:
+        """A task whose supervisor has gone cannot be muted, and the caller is told "unknown"."""
+        sub = self._subscriber(tmp_path)
+        try:
+            await sub.start()
+            assert await sub.set_mute(CONTAINER_SHORT_ID, True) is None
+        finally:
+            await sub.stop()
+
+    @pytest.mark.parametrize(
+        ("held", "expected"),
+        [
+            (frozenset({CONTAINER_SHORT_ID}), True),
+            (frozenset(), False),
+            (frozenset({OTHER_SHORT_ID}), False),
+            (None, None),
+        ],
+        ids=["muted", "audible", "other-muted", "hub-cannot-answer"],
+    )
+    async def test_is_muted_reads_the_hubs_own_answer(
+        self,
+        tmp_path: Path,
+        stub_event_subscriber: dict[str, MagicMock],
+        held: frozenset[str] | None,
+        expected: bool | None,
+    ) -> None:
+        """The answer is the hub's mute set, read back — or ``None`` when it cannot say."""
+        target = self._hub_socket(tmp_path, CONTAINER_SHORT_ID)
+        sub = self._subscriber(tmp_path)
+        try:
+            await sub.start()
+            stub_event_subscriber[str(target)].mutes = AsyncMock(return_value=held)
+
+            assert await sub.is_muted(CONTAINER_SHORT_ID) is expected
+        finally:
+            await sub.stop()
+
+    async def test_is_muted_without_a_hub_is_unknown(
+        self, tmp_path: Path, stub_event_subscriber: dict[str, MagicMock]
+    ) -> None:
+        """No live hub, no answer — never a guess that the prompts are on."""
+        sub = self._subscriber(tmp_path)
+        try:
+            await sub.start()
+            assert await sub.is_muted(CONTAINER_SHORT_ID) is None
+        finally:
+            await sub.stop()

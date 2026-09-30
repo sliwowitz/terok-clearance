@@ -325,6 +325,28 @@ class EventSubscriber:
         """Cut short any in-flight reconnect back-off — forwards to the client."""
         self._client.poke_reconnect()
 
+    # ── Mute ──────────────────────────────────────────────────────────
+
+    async def set_mute(self, container: str, muted: bool) -> bool | None:
+        """Mute or unmute *container*'s prompts on this subscriber's hub.
+
+        *container* is the key the events carry (``ClearanceEvent.container``,
+        the 12-char short id under the terok supervisor).  Returns the state
+        in force, or ``None`` when the call did not land and the state is
+        unknown.  Muting drops the prompt only: the connection was already
+        refused.  The reader writes it to the audit log only while the
+        task's shield audit is enabled.  With audit off, a muted refusal
+        leaves no record at all.
+        """
+        return await self._client.set_mute(container, muted)
+
+    async def mutes(self) -> frozenset[str] | None:
+        """Read back which containers this subscriber's hub is not prompting about.
+
+        ``None`` when the hub could not answer — unknown, not "nothing muted".
+        """
+        return await self._client.mutes()
+
     # ── Event dispatch ────────────────────────────────────────────────
 
     async def _on_event(self, event: ClearanceEvent) -> None:
@@ -459,10 +481,20 @@ class EventSubscriber:
         return None
 
     async def _handle_verdict_applied(self, event: ClearanceEvent) -> None:
-        """Replace the pending notification in place with the verdict outcome."""
+        """Replace the pending notification in place with the verdict outcome.
+
+        A failed verdict's body adds the hub's ``reason``, which is what
+        ``terok-shield`` said on stderr.  This matters most when the security
+        tier refuses an Allow.  Shield's line then says a ``shield.override``
+        is the only way through.  Without it, the operator gets a red "Allow
+        failed" with no explanation.  The text was sanitised by the hub
+        before fan-out, like every other event field.
+        """
         pending = self._pending.pop(event.request_id, None)
         if pending is None:
             return
+        dossier = pending.dossier
+        body = _identity_line(dossier, pending.container)
         success_titles = {"allow": "Allowed", "deny": "Denied"}
         failure_titles = {"allow": "Allow failed", "deny": "Deny failed"}
         if event.ok:
@@ -474,6 +506,8 @@ class EventSubscriber:
                 f"{pending.target}"
             )
             hints = _HINT_SECURITY_ALERT
+            if event.reason:
+                body = f"{body}\n{event.reason}"
         if event.container != pending.container:
             _log.warning(
                 "verdict_applied container mismatch for %s: event=%s pending=%s",
@@ -481,10 +515,9 @@ class EventSubscriber:
                 event.container,
                 pending.container,
             )
-        dossier = pending.dossier
         await self._notifier.notify(
             title,
-            _identity_line(dossier, pending.container),
+            body,
             replaces_id=pending.notification_id,
             hints=hints,
             timeout_ms=-1,
@@ -764,6 +797,47 @@ class MultiSocketSubscriber:
         self._subscribers.clear()
         if children:
             await asyncio.gather(*(child.stop() for child in children), return_exceptions=True)
+
+    # ── Mute ──────────────────────────────────────────────────────────
+
+    async def set_mute(self, container_id: str, muted: bool) -> bool | None:
+        """Mute or unmute one container's prompts.
+
+        *container_id* is the 12-char short id, and it does both jobs: the
+        supervisor names each hub's socket directory after it, and the hub's
+        events carry it in ``ClearanceEvent.container`` — so a UI already
+        holds it for every prompt it shows (``Notification.container_id``).
+        A display name, such as the dossier's task name, addresses nothing.
+
+        Returns the state in force, or ``None`` when it is unknown: no live
+        hub for this container (its supervisor may simply have exited), or a
+        call that did not land.  The reason is logged at WARNING.
+        """
+        subscriber = self._subscriber_for(container_id)
+        if subscriber is None:
+            _log.warning("no clearance hub for %s — mute not applied", container_id)
+            return None
+        return await subscriber.set_mute(container_id, muted)
+
+    async def is_muted(self, container_id: str) -> bool | None:
+        """Ask *container_id*'s hub whether its prompts are muted.
+
+        Same addressing as [`set_mute`][terok_clearance.client.subscriber.MultiSocketSubscriber.set_mute].
+        ``None`` when the hub is gone or cannot answer (one that predates
+        ``Mutes()`` included): unknown, which a UI must not show as audible.
+        """
+        subscriber = self._subscriber_for(container_id)
+        if subscriber is None:
+            return None
+        mutes = await subscriber.mutes()
+        return None if mutes is None else container_id in mutes
+
+    def _subscriber_for(self, container_id: str) -> EventSubscriber | None:
+        """The child subscriber whose hub socket sits in *container_id*'s directory."""
+        for path, subscriber in self._subscribers.items():
+            if Path(path).parent.name == container_id:
+                return subscriber
+        return None
 
     # ── Reconciliation ────────────────────────────────────────────────
 

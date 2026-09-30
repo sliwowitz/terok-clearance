@@ -3,6 +3,8 @@
 
 """Tests for the public API surface of terok_clearance."""
 
+import ast
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import terok_clearance
@@ -21,6 +23,8 @@ class TestPublicApi:
             "COMMANDS",
             "CallbackNotifier",
             "ClearanceClient",
+            "set_container_mute",
+            "container_mutes",
             "ClearanceEvent",
             "ClearanceHub",
             "EventSubscriber",
@@ -38,6 +42,29 @@ class TestPublicApi:
     def test_all_matches_lazy_map(self):
         """``__all__`` and the lazy re-export map stay in lockstep."""
         assert set(terok_clearance.__all__) == set(terok_clearance._LAZY)
+
+    def test_type_checking_block_mirrors_lazy_map(self):
+        """Each lazy name is imported under ``TYPE_CHECKING`` from the module ``_LAZY`` names.
+
+        mypy and IDEs see the barrel only through that block: a name missing
+        there still imports at runtime but reads as ``object`` to a type
+        checker, which is how a public symbol silently loses its types.
+        """
+        tree = ast.parse(Path(terok_clearance.__file__).read_text(encoding="utf-8"))
+        guarded = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name)
+            and node.test.id == "TYPE_CHECKING"
+        )
+        imported = {
+            alias.asname or alias.name: node.module
+            for node in guarded.body
+            if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+        }
+        assert imported == terok_clearance._LAZY
 
     def test_all_names_resolve(self):
         """Every ``__all__`` name imports lazily via ``__getattr__``."""

@@ -4,8 +4,11 @@
 """Transport-only varlink client for ``org.terok.Clearance1``.
 
 Connects to the hub over the clearance unix socket, streams events via
-a background subscriber task, and exposes ``verdict()`` for the
-companion RPC channel.  Doesn't know anything about notification
+a background subscriber task, and exposes ``verdict()`` and the mute
+calls for the companion RPC channel.  Callers with no subscription use
+the one-shot [`set_container_mute`][terok_clearance.client.client.set_container_mute]
+and [`container_mutes`][terok_clearance.client.client.container_mutes],
+which raise instead of answering "unknown".  Doesn't know anything about notification
 rendering or desktop state — that's [`EventSubscriber`][terok_clearance.EventSubscriber]'s job and
 lives one module up.
 
@@ -20,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
 from asyncvarlink import (
@@ -40,6 +43,60 @@ _log = logging.getLogger(__name__)
 EventCallback = Callable[[ClearanceEvent], Awaitable[None]]
 
 
+@contextlib.asynccontextmanager
+async def _one_shot(socket_path: Path) -> AsyncIterator[VarlinkInterfaceProxy]:
+    """Connect to one hub for a single call and close the connection however it ends.
+
+    Callers bound the whole exchange with [`asyncio.wait_for`][asyncio.wait_for]
+    when a wedged hub must not stall them; cancellation still closes the socket.
+    """
+    transport, proto = await connect_unix_varlink(VarlinkClientProtocol, str(socket_path))
+    try:
+        yield proto.make_proxy(Clearance1Interface)
+    finally:
+        with contextlib.suppress(Exception):
+            transport.close()
+
+
+async def set_container_mute(socket_path: Path, container: str, muted: bool) -> bool:
+    """Mute or unmute one container's prompts over a single short-lived connection.
+
+    For callers with no live subscription — a CLI verb, a one-off action — that
+    want the RPC without the event stream `ClearanceClient.start` opens.
+
+    *container* is the key the hub's events carry in ``ClearanceEvent.container``:
+    under the terok supervisor, the 12-char short container id — never the
+    podman name, and never a task name.  The supervisor's per-container hub
+    sits at ``$XDG_RUNTIME_DIR/terok/clearance/<short id>/hub.sock``, so the
+    same id addresses both the socket and the mute.
+
+    Returns the state the hub now holds.  Raises when the hub cannot be
+    reached or refuses the call (``UnknownContainer`` for a key it does not
+    serve): a one-shot caller has nothing else to tell the operator, and a
+    guess would put a mute on screen that the hub never applied.
+    """
+    async with _one_shot(socket_path) as proxy:
+        reply = await proxy.SetMute(container=container, muted=muted)
+    return bool(reply["muted"])
+
+
+async def container_mutes(socket_path: Path) -> frozenset[str]:
+    """Read back which containers one hub is not prompting about.
+
+    The query half of [`set_container_mute`][terok_clearance.client.client.set_container_mute],
+    over its own short-lived connection, in the keys events carry (the 12-char
+    short id under the terok supervisor).  An empty set is the hub saying
+    nothing is muted.
+
+    Raises when the hub cannot be reached, and when it predates ``Mutes()``
+    (a varlink ``org.varlink.service.MethodNotFound`` error).  Either way the
+    state is unknown, which a caller must show as unknown — never as audible.
+    """
+    async with _one_shot(socket_path) as proxy:
+        reply = await proxy.Mutes()
+    return frozenset(reply["containers"])
+
+
 class ClearanceClient:
     """Thin async client for the Clearance1 varlink service.
 
@@ -51,6 +108,11 @@ class ClearanceClient:
     * [`verdict`][terok_clearance.client.client.ClearanceClient.verdict] — RPC call; returns ``True`` if ``terok-shield``
       applied the action, ``False`` on any refusal or shield failure.
       The refusal reason is logged at WARNING.
+
+    [`set_mute`][terok_clearance.client.client.ClearanceClient.set_mute] and
+    [`mutes`][terok_clearance.client.client.ClearanceClient.mutes] ride the
+    same RPC connection.  Both answer ``None`` when the call did not land,
+    so a UI can say "unknown" instead of repeating what it asked for.
 
     The callback runs on the same event loop as the rest of the client;
     exceptions it raises are logged and swallowed so one bad handler
@@ -70,6 +132,10 @@ class ClearanceClient:
         EOFError,
         OSError,
     )
+
+    #: Every way a mute RPC can fail to land: the hub refused it (a varlink
+    #: error reply) or the connection went away under it.
+    _RPC_FAILURES = (VarlinkErrorReply, *_DISCONNECT_ERRORS)
 
     def __init__(self, *, socket_path: Path | None = None) -> None:
         """Remember the target socket; defaults to [`default_clearance_socket_path`][terok_clearance.client.client.default_clearance_socket_path]."""
@@ -161,6 +227,9 @@ class ClearanceClient:
         invalid action, shield-exec failure).  Callers typically ignore
         the return value and let the subsequent ``verdict_applied``
         event drive UI updates; refusal reasons are logged at WARNING.
+        For a shield-exec failure, the event carries shield's stderr as
+        ``reason``, so a popup can explain the failure without this
+        method's return value.
         """
         if self._rpc_proxy is None:
             _log.error("verdict() called before start()")
@@ -183,6 +252,50 @@ class ClearanceClient:
             return False
         # reply is {"ok": bool} per the return_parameter wrapper.
         return bool(reply.get("ok", False))
+
+    async def set_mute(self, container: str, muted: bool) -> bool | None:
+        """Mute or unmute *container*'s prompts via the hub's ``SetMute`` RPC.
+
+        *container* is the key the hub's events carry in
+        ``ClearanceEvent.container`` — the 12-char short id under the terok
+        supervisor, never a podman or task name.
+
+        Returns the mute state the hub now holds, or ``None`` when the call
+        did not land: no live connection, a connection that dropped under
+        the call, or a refusal such as ``UnknownContainer``.  ``None`` means
+        the state is unknown — the reason is logged at WARNING — and a UI
+        must say so rather than claim either state.
+        """
+        if self._rpc_proxy is None:
+            _log.warning(
+                "SetMute for %s not sent: no connection to %s", container, self._socket_path
+            )
+            return None
+        try:
+            reply = await self._rpc_proxy.SetMute(container=container, muted=muted)
+        except self._RPC_FAILURES as err:
+            _log.warning("SetMute for %s (muted=%s) failed: %s", container, muted, err)
+            return None
+        return bool(reply["muted"])
+
+    async def mutes(self) -> frozenset[str] | None:
+        """Read back which containers the hub is not prompting about, via ``Mutes()``.
+
+        Returns the set in the keys events carry — empty when nothing is
+        muted — or ``None`` when it cannot be known: no live connection, a
+        dropped connection, or a hub that predates ``Mutes()`` and answers
+        ``org.varlink.service.MethodNotFound``.  ``None`` must read as
+        "unknown", never as "not muted"; the reason is logged at WARNING.
+        """
+        if self._rpc_proxy is None:
+            _log.warning("Mutes() not sent: no connection to %s", self._socket_path)
+            return None
+        try:
+            reply = await self._rpc_proxy.Mutes()
+        except self._RPC_FAILURES as err:
+            _log.warning("Mutes() on %s failed: %s", self._socket_path, err)
+            return None
+        return frozenset(reply["containers"])
 
     async def _run_stream(self) -> None:
         """Pump Subscribe() events into the user callback, reconnecting on drop.

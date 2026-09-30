@@ -30,6 +30,26 @@ PROJECT = "warp-core"
 TASK = "build"
 REASON = "install deps"
 
+# Container identity.  A hub keys a container by the 12-char short id the
+# shield reader stamps on its events; the full id and the podman name are
+# aliases at best.  Every one of these is a distinct string on purpose, so
+# a test that passes one where another belongs fails instead of agreeing
+# with itself.
+CONTAINER_SHORT_ID = "c0ffee0a1b2c"
+CONTAINER_FULL_ID = CONTAINER_SHORT_ID + "3d" * 26
+CONTAINER_NAME = "warp-core-cli-build"
+OTHER_SHORT_ID = "decaf0e1f2a3"
+
+# What ``terok-shield allow`` writes to stderr when the security tier refuses
+# a target.  This matches shield's real message, including its em dash, which
+# the hub's printable-ASCII rule turns into a space.  The next step comes at
+# the end of the line, and TIER_REFUSAL_ADVICE is that part, so a test can
+# check that it survives to the popup.
+TIER_REFUSAL_ADVICE = "break-glass only: use a shield.override (reason + expires)"
+TIER_REFUSAL_STDERR = (
+    f"Error: {DOMAIN} is a security-tier host — {TIER_REFUSAL_ADVICE} to reach it directly"
+)
+
 
 @pytest.fixture
 def private_runtime_dir(tmp_path: Path) -> Iterator[Path]:

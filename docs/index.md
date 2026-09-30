@@ -68,6 +68,70 @@ sees one merged stream.
   `NullNotifier` when D-Bus is unavailable (headless, container, CI)
 - **Protocol-based** — consumers type-hint against `Notifier`
   (PEP 544 Protocol)
+- **Mute without fail-open** — `SetMute(container, muted)` stops the
+  Allow/Deny prompts for one container and `Mutes()` reads the state
+  back.  The refusal already happened in the kernel; muting changes who
+  is asked, never what the shield did.  Nothing is auto-allowed.  The
+  refusal is still recorded in the container's audit log while the
+  task's shield audit is enabled — see below for audit off
+
+## Muting a container's prompts
+
+A container is addressed by the key its events carry in
+`ClearanceEvent.container`: under the terok supervisor, the **12-char
+short container id** the shield reader stamps on everything it emits.
+The same id names the hub's socket directory
+(`$XDG_RUNTIME_DIR/terok/clearance/<short_id>/hub.sock`).  The podman
+name and the task name are display labels; muting by them would
+silence nothing, so a hub launched for one container
+(`ClearanceHub(container=<short id>, aliases=…)`) refuses any key it
+cannot match with an `UnknownContainer` error.  That hub also stamps every
+event it ingests with the short id, so host-side shield events sent under
+the podman name land on the same identity as the reader's.  The short id
+is also the only value `container=` accepts.  A podman name or the full
+id raises `ValueError` when the hub is constructed.  A single string
+passed as `aliases=` or `muted=` raises `TypeError`, because it would be
+split into one key per character.
+
+| Call | Use it when | On failure |
+|------|-------------|------------|
+| `set_container_mute(socket, short_id, muted)` | one-off action, no live subscription | raises |
+| `container_mutes(socket)` | read the mute set back, no subscription | raises |
+| `ClearanceClient.set_mute` / `.mutes()` | inside a live subscriber | returns `None` = unknown |
+| `MultiSocketSubscriber.set_mute(short_id, muted)` / `.is_muted(short_id)` | across every per-container hub | returns `None` = unknown |
+
+`None` and a raised error both mean *the state is unknown* — show that,
+never "audible".  Hubs that predate `Mutes()` answer
+`org.varlink.service.MethodNotFound`, which lands in the same bucket.
+
+The mute set lives in the hub's memory.  `ClearanceHub(muted=[short_id])`
+seeds it before the hub starts listening, so a container can start muted
+with no first prompt slipping out; the per-container supervisor rebuilds
+the hub on every container start, so a restart returns to that launch
+default and a runtime mute ends with the hub that held it.
+
+A mute does not affect whether a refusal is recorded; that depends only
+on the task's shield audit setting.  The shield reader writes each
+refusal to the container's audit log only while that audit is enabled.
+**A muted container with audit disabled keeps no record of its refusals.**
+Nobody is asked and nothing is logged, though the connections are still
+refused.  If the refusals matter later, for example to harvest them into
+an allowlist, leave audit on.  terok-shield's harvest reports a task
+with audit disabled as such, not as "nothing harvested", so the gap is
+visible.
+
+## When a verdict fails
+
+When `terok-shield` refuses a verdict, the hub fans the outcome out to
+every subscriber as a `verdict_applied` event with `ok` false.  The event
+also carries shield's stderr, sanitised, in its `reason` field, and the
+popup comes from this event.  The `Verdict` caller's error reply goes to
+that caller only.  The red "Allow failed" or "Deny failed" popup therefore
+shows shield's message under the task line, in the desktop notifier, the
+terminal UI and any `EventSubscriber`-based screen alike.  This matters
+most when the security tier refuses an Allow, for example for a
+vault-relayed provider host.  Shield's message then says the only way
+through is a `shield.override` with a reason and an expiry.
 
 ## Quick start
 
@@ -125,6 +189,7 @@ terok-clearance-hub clearance               # interactive terminal UI
 | `Notifier` | PEP 544 Protocol for consumer type hints |
 | `ClearanceHub`, `ClearanceClient`, `EventSubscriber` | Varlink hub + subscriber API |
 | `MultiSocketSubscriber` | Fan-in subscriber across every per-container hub socket |
+| `set_container_mute()`, `container_mutes()` | One-shot mute and mute read-back against one hub socket |
 | `VerdictServer` | Embeddable verdict-helper varlink server (composed by the supervisor) |
 
 ## Next steps

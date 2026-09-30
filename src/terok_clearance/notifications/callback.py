@@ -35,6 +35,11 @@ class Notification:
     discards all of them; the TUI uses the task triple to render a
     Task column for terok-managed containers and falls back to the
     container name for standalone ones.
+
+    Only ``container_id`` identifies the container to the hub — it is the
+    short id the events carry, so it is what a mute call takes.  The
+    others are labels: ``container_name`` falls back to the dossier's
+    ``name``, which under terok is the task name.
     """
 
     nid: int

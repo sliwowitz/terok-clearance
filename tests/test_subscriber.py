@@ -29,10 +29,12 @@ from terok_clearance.client.subscriber import (
     NOTIFY_SHIELD_DOWN,
     NOTIFY_VERDICT,
     EventSubscriber,
+    _identity_line,
 )
 from terok_clearance.domain.events import ClearanceEvent
+from terok_clearance.wire.sanitize import sanitize
 
-from .conftest import CONTAINER, DEST_IP, DOMAIN
+from .conftest import CONTAINER, DEST_IP, DOMAIN, TIER_REFUSAL_ADVICE, TIER_REFUSAL_STDERR
 
 # ── Fixtures ──────────────────────────────────────────────────────────
 
@@ -189,6 +191,55 @@ class TestVerdictApplied:
         call = mock_notifier.notify.await_args
         assert call.args[0] == f"Allow failed: {DOMAIN}"
         assert call.kwargs["hints"] is _HINT_SECURITY_ALERT
+
+    @staticmethod
+    async def _resolve(
+        subscriber: EventSubscriber, mock_notifier: AsyncMock, *, ok: bool, reason: str
+    ) -> str:
+        """Prompt, then resolve it with one verdict_applied; return the popup body."""
+        await subscriber._on_event(_blocked())
+        mock_notifier.notify.reset_mock()
+        await subscriber._on_event(
+            ClearanceEvent(
+                type="verdict_applied",
+                container=CONTAINER,
+                request_id=f"{CONTAINER}:1",
+                action="allow",
+                ok=ok,
+                reason=reason,
+            )
+        )
+        return mock_notifier.notify.await_args.args[1]
+
+    @pytest.mark.asyncio
+    async def test_failure_body_says_why(
+        self, subscriber: EventSubscriber, mock_notifier: AsyncMock
+    ) -> None:
+        """Shield's refusal sits under the identity line: the operator's next step."""
+        reason = sanitize(TIER_REFUSAL_STDERR)
+
+        body = await self._resolve(subscriber, mock_notifier, ok=False, reason=reason)
+
+        assert body.splitlines() == [_identity_line({}, CONTAINER), reason]
+        assert TIER_REFUSAL_ADVICE in body
+
+    @pytest.mark.asyncio
+    async def test_failure_without_a_reason_keeps_the_identity_body(
+        self, subscriber: EventSubscriber, mock_notifier: AsyncMock
+    ) -> None:
+        """A hub that predates ``reason`` still yields the familiar one-line body."""
+        body = await self._resolve(subscriber, mock_notifier, ok=False, reason="")
+
+        assert body == _identity_line({}, CONTAINER)
+
+    @pytest.mark.asyncio
+    async def test_success_shows_no_reason(
+        self, subscriber: EventSubscriber, mock_notifier: AsyncMock
+    ) -> None:
+        """A verdict that landed is confirmed, not explained."""
+        body = await self._resolve(subscriber, mock_notifier, ok=True, reason=TIER_REFUSAL_ADVICE)
+
+        assert body == _identity_line({}, CONTAINER)
 
     @pytest.mark.asyncio
     async def test_no_pending_is_silent(
