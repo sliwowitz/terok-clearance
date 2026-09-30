@@ -11,6 +11,7 @@ transport.  End-to-end varlink round-trips live in ``test_client.py``.
 from __future__ import annotations
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -20,11 +21,22 @@ from terok_clearance.hub.server import ClearanceHub, _translate_reader_event
 from terok_clearance.wire.errors import (
     InvalidAction,
     ShieldCliFailed,
+    UnknownContainer,
     UnknownRequest,
     VerdictTupleMismatch,
 )
 
-from .conftest import CONTAINER, DEST_IP, DOMAIN
+from .conftest import (
+    CONTAINER,
+    CONTAINER_FULL_ID,
+    CONTAINER_NAME,
+    CONTAINER_SHORT_ID,
+    DEST_IP,
+    DOMAIN,
+    OTHER_SHORT_ID,
+    TIER_REFUSAL_ADVICE,
+    TIER_REFUSAL_STDERR,
+)
 
 # ── Reader-event translation ──────────────────────────────────────────
 
@@ -411,6 +423,66 @@ class TestApplyVerdict:
         assert hub._live_verdicts[request_id] == (CONTAINER, DOMAIN)
 
 
+class TestVerdictReason:
+    """A refused verdict tells every subscriber why, not only the caller."""
+
+    @staticmethod
+    async def _refused_reason(stderr: str) -> str:
+        """Run one Allow that shield refuses with *stderr*; return the fanned-out reason."""
+        hub = _hub()
+        hub._update_live_verdicts(_blocked())
+        hub._verdict_client.apply = AsyncMock(return_value=(False, stderr))
+        q: asyncio.Queue = asyncio.Queue(maxsize=4)
+        hub._subscribers.add(q)
+
+        with pytest.raises(ShieldCliFailed):
+            await hub._apply_verdict(CONTAINER, f"{CONTAINER}:1", DOMAIN, "allow")
+
+        event = q.get_nowait()
+        assert event.type == "verdict_applied"
+        assert event.ok is False
+        return event.reason
+
+    @pytest.mark.asyncio
+    async def test_a_tier_refusal_reaches_the_fan_out(self) -> None:
+        """The popups are drawn from the event, so the way forward must ride on it."""
+        reason = await self._refused_reason(TIER_REFUSAL_STDERR)
+
+        assert TIER_REFUSAL_ADVICE in reason
+
+    @pytest.mark.asyncio
+    async def test_the_reason_obeys_the_wire_rule(self) -> None:
+        """Shield's stderr lands on the shared stream, so it gets the printable-ASCII rule."""
+        reason = await self._refused_reason(TIER_REFUSAL_STDERR + "\nsecond\x1b[31m line")
+
+        assert reason.isascii()
+        assert reason.isprintable()
+
+    @pytest.mark.asyncio
+    async def test_a_long_host_keeps_the_advice(self) -> None:
+        """The advice ends shield's line; a cap tighter than the helper's would cut it."""
+        long_host = ".".join(["deep-label"] * 20) + "." + DOMAIN
+        stderr = TIER_REFUSAL_STDERR.replace(DOMAIN, long_host)
+
+        reason = await self._refused_reason(stderr)
+
+        assert reason.endswith("to reach it directly")
+        assert TIER_REFUSAL_ADVICE in reason
+
+    @pytest.mark.asyncio
+    async def test_a_verdict_that_landed_carries_no_reason(self) -> None:
+        """Whatever shield printed on success, there is nothing to explain."""
+        hub = _hub()
+        hub._update_live_verdicts(_blocked())
+        hub._verdict_client.apply = AsyncMock(return_value=(True, TIER_REFUSAL_STDERR))
+        q: asyncio.Queue = asyncio.Queue(maxsize=4)
+        hub._subscribers.add(q)
+
+        assert await hub._apply_verdict(CONTAINER, f"{CONTAINER}:1", DOMAIN, "allow") is True
+
+        assert q.get_nowait().reason == ""
+
+
 # ── Reader-event relay (end-to-end internals) ─────────────────────────
 
 
@@ -709,3 +781,288 @@ class TestReadVerdictTtlFromConfig:
         # Binding and timestamp are restored for retry
         assert rid in hub._live_verdicts
         assert hub._live_verdicts_ts[rid] == original_ts
+
+
+# ── Mute: who is asked, not what the shield did ───────────────────────
+
+
+def _reader_pending(
+    container: str = CONTAINER_SHORT_ID, request_id: str = f"{CONTAINER_SHORT_ID}:1"
+) -> dict:
+    """One reader ``pending`` dict, the shape the ingester delivers.
+
+    Keyed by the short id by default, because that is what the shield reader
+    stamps on everything it emits.
+    """
+    return {
+        "type": "pending",
+        "container": container,
+        "id": request_id,
+        "dest": DEST_IP,
+        "port": 443,
+        "proto": 6,
+        "domain": DOMAIN,
+    }
+
+
+def _listening_hub(**kwargs) -> tuple[ClearanceHub, asyncio.Queue]:
+    """An unstarted hub with one subscriber queue attached, for fan-out checks."""
+    hub = _hub(**kwargs)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+    hub._subscribers.add(queue)
+    return hub, queue
+
+
+def _per_container_hub(**kwargs) -> tuple[ClearanceHub, asyncio.Queue]:
+    """A listening hub built for one container, the way the supervisor builds it."""
+    return _listening_hub(
+        container=CONTAINER_SHORT_ID, aliases=(CONTAINER_FULL_ID, CONTAINER_NAME), **kwargs
+    )
+
+
+class TestMute:
+    """A muted container's refusals stop reaching the operator, and nothing else changes."""
+
+    @pytest.mark.asyncio
+    async def test_muted_container_raises_no_prompt(self) -> None:
+        """The blocked event is dropped before fan-out."""
+        hub, q = _listening_hub()
+
+        assert await hub._set_mute(CONTAINER_SHORT_ID, True) is True
+        await hub._relay_reader_event(_reader_pending())
+
+        assert q.empty()
+
+    @pytest.mark.asyncio
+    async def test_muted_container_binds_no_verdict(self) -> None:
+        """A request nobody was shown must not wait in the authz map for an answer."""
+        hub, _ = _listening_hub()
+
+        await hub._set_mute(CONTAINER_SHORT_ID, True)
+        await hub._relay_reader_event(_reader_pending())
+
+        assert hub._live_verdicts == {}
+
+    @pytest.mark.asyncio
+    async def test_unmuting_brings_the_prompts_back(self) -> None:
+        """Mute is reversible, and the next refusal prompts again."""
+        hub, q = _listening_hub()
+
+        await hub._set_mute(CONTAINER_SHORT_ID, True)
+        await hub._relay_reader_event(_reader_pending())
+        assert await hub._set_mute(CONTAINER_SHORT_ID, False) is False
+        await hub._relay_reader_event(_reader_pending(request_id=f"{CONTAINER_SHORT_ID}:2"))
+
+        event = q.get_nowait()
+        assert event.request_id == f"{CONTAINER_SHORT_ID}:2"
+
+    @pytest.mark.asyncio
+    async def test_mute_is_per_container(self) -> None:
+        """Muting one task says nothing about another's refusals."""
+        hub, q = _listening_hub()
+
+        await hub._set_mute(CONTAINER_SHORT_ID, True)
+        await hub._relay_reader_event(
+            _reader_pending(container=OTHER_SHORT_ID, request_id=f"{OTHER_SHORT_ID}:1")
+        )
+
+        assert q.get_nowait().container == OTHER_SHORT_ID
+
+    @pytest.mark.asyncio
+    async def test_lifecycle_events_are_never_muted(self) -> None:
+        """Mute covers the Allow/Deny question; it does not blind the operator."""
+        hub, q = _listening_hub()
+
+        await hub._set_mute(CONTAINER_SHORT_ID, True)
+        await hub._relay_reader_event({"type": "shield_down", "container": CONTAINER_SHORT_ID})
+
+        assert q.get_nowait().type == "shield_down"
+
+    @pytest.mark.asyncio
+    async def test_a_container_that_exits_keeps_no_mute(self) -> None:
+        """Mute is per running container — a recreated task starts audible."""
+        hub, _ = _listening_hub()
+
+        await hub._set_mute(CONTAINER_SHORT_ID, True)
+        await hub._relay_reader_event({"type": "container_exited", "container": CONTAINER_SHORT_ID})
+
+        assert await hub._mutes() == []
+
+    @pytest.mark.asyncio
+    async def test_a_name_never_mutes_the_short_id(self) -> None:
+        """The prompts carry the short id, so a mute filed under the name silences nothing.
+
+        This is the mix-up a hub without an identity cannot catch — it takes
+        keys as given — and why the supervisor builds one that can.
+        """
+        hub, q = _listening_hub()
+
+        await hub._set_mute(CONTAINER_NAME, True)
+        await hub._relay_reader_event(_reader_pending())
+
+        assert q.get_nowait().container == CONTAINER_SHORT_ID
+
+
+class TestMutesReadBack:
+    """``Mutes()`` reports what the hub holds, not what anyone last asked for."""
+
+    @pytest.mark.asyncio
+    async def test_reports_every_muted_container_sorted(self) -> None:
+        """A stable, sorted reply — equal states give equal answers."""
+        hub = _hub()
+
+        await hub._set_mute(OTHER_SHORT_ID, True)
+        await hub._set_mute(CONTAINER_SHORT_ID, True)
+
+        assert await hub._mutes() == sorted([CONTAINER_SHORT_ID, OTHER_SHORT_ID])
+
+    @pytest.mark.asyncio
+    async def test_unmute_drops_the_container(self) -> None:
+        """An unmuted container is no longer reported."""
+        hub = _hub()
+
+        await hub._set_mute(CONTAINER_SHORT_ID, True)
+        await hub._set_mute(CONTAINER_SHORT_ID, False)
+
+        assert await hub._mutes() == []
+
+
+class TestPerContainerIdentity:
+    """A hub built for one container keys everything by that container's short id."""
+
+    @pytest.mark.asyncio
+    async def test_host_side_events_are_stamped_with_the_short_id(self) -> None:
+        """Shield CLI events arrive under the podman name; subscribers see the short id."""
+        hub, q = _per_container_hub()
+
+        await hub._relay_reader_event({"type": "shield_down", "container": CONTAINER_NAME})
+
+        assert q.get_nowait().container == CONTAINER_SHORT_ID
+
+    @pytest.mark.asyncio
+    async def test_any_key_on_the_ingester_is_this_container(self) -> None:
+        """The ingester socket is per-container, so even an unregistered key is stamped."""
+        hub, q = _per_container_hub()
+
+        await hub._relay_reader_event(_reader_pending(container=OTHER_SHORT_ID))
+
+        assert q.get_nowait().container == CONTAINER_SHORT_ID
+
+    @pytest.mark.asyncio
+    async def test_shield_down_by_name_retires_short_id_bindings(self) -> None:
+        """A shield drop under the name releases the prompts the reader raised by short id."""
+        hub, _ = _per_container_hub()
+        await hub._relay_reader_event(_reader_pending())
+        assert hub._live_verdicts
+
+        await hub._relay_reader_event({"type": "shield_down", "container": CONTAINER_NAME})
+
+        assert hub._live_verdicts == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("alias", [CONTAINER_FULL_ID, CONTAINER_NAME])
+    async def test_mute_by_alias_lands_on_the_short_id(self, alias: str) -> None:
+        """Registered aliases resolve to the short id, so the prompt is really gone."""
+        hub, q = _per_container_hub()
+
+        assert await hub._set_mute(alias, True) is True
+        await hub._relay_reader_event(_reader_pending())
+
+        assert q.empty()
+        assert await hub._mutes() == [CONTAINER_SHORT_ID]
+
+    @pytest.mark.asyncio
+    async def test_mute_under_a_foreign_key_is_refused(self) -> None:
+        """A key no event will ever carry fails loudly instead of muting nothing."""
+        hub, _ = _per_container_hub()
+
+        with pytest.raises(UnknownContainer) as excinfo:
+            await hub._set_mute(OTHER_SHORT_ID, True)
+
+        assert excinfo.value.container == OTHER_SHORT_ID
+        assert excinfo.value.expected == CONTAINER_SHORT_ID
+        assert await hub._mutes() == []
+
+    def test_aliases_need_a_container(self) -> None:
+        """Aliases with nothing to stand for are a launcher bug, not a no-op."""
+        with pytest.raises(ValueError, match="aliases"):
+            ClearanceHub(aliases=(CONTAINER_NAME,))
+
+    def test_an_empty_container_is_rejected(self) -> None:
+        """An empty key names no container."""
+        with pytest.raises(ValueError, match="container"):
+            ClearanceHub(container="")
+
+    @pytest.mark.parametrize("key", [CONTAINER_NAME, CONTAINER_FULL_ID])
+    def test_only_the_short_id_can_be_the_container(self, key: str) -> None:
+        """A name or the full id would re-key every event to something no caller uses.
+
+        Accepted, either would make the hub stamp its events with a key the
+        short-id callers never send: their mutes refused, their read-backs
+        showing a muted task as audible.  Refused here, the launcher's mistake
+        surfaces at construction.
+        """
+        with pytest.raises(ValueError, match="short id"):
+            ClearanceHub(container=key)
+
+    @pytest.mark.parametrize("parameter", ["aliases", "muted"])
+    def test_a_bare_string_is_not_a_collection_of_keys(self, parameter: str) -> None:
+        """A string iterates by character — twelve one-letter keys, and the default lost."""
+        with pytest.raises(TypeError, match=parameter):
+            ClearanceHub(container=CONTAINER_SHORT_ID, **{parameter: CONTAINER_SHORT_ID})
+
+    def test_a_bare_string_of_mutes_is_refused_without_a_container_too(self) -> None:
+        """A multi-container hub takes keys as given, so it would mute single letters."""
+        with pytest.raises(TypeError, match="muted"):
+            ClearanceHub(muted=CONTAINER_SHORT_ID)
+
+
+class TestLaunchDefault:
+    """``muted=`` seeds the mute set before the hub listens, as the launch default."""
+
+    @pytest.mark.asyncio
+    async def test_seeded_container_is_muted_from_the_first_event(self) -> None:
+        """No unmuted prompt can slip out between construction and the first event."""
+        hub, q = _listening_hub(muted=[CONTAINER_SHORT_ID])
+
+        await hub._relay_reader_event(_reader_pending())
+
+        assert q.empty()
+        assert await hub._mutes() == [CONTAINER_SHORT_ID]
+
+    def test_seed_is_logged_as_a_launch_default(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The journal says why a container is quiet, without anyone having asked."""
+        with caplog.at_level(logging.INFO, logger="terok_clearance.hub.server"):
+            ClearanceHub(container=CONTAINER_SHORT_ID, muted=[CONTAINER_SHORT_ID])
+
+        assert f"muted for {CONTAINER_SHORT_ID} (launch default)" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_seed_by_alias_lands_on_the_short_id(self) -> None:
+        """A launcher holding the full id still mutes the key the events carry."""
+        hub, _ = _per_container_hub(muted=[CONTAINER_FULL_ID])
+
+        assert await hub._mutes() == [CONTAINER_SHORT_ID]
+
+    @pytest.mark.asyncio
+    async def test_seed_for_a_foreign_key_stays_audible(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A default that cannot be honoured is logged and leaves the prompts on."""
+        with caplog.at_level(logging.WARNING, logger="terok_clearance.hub.server"):
+            hub, q = _per_container_hub(muted=[OTHER_SHORT_ID])
+        await hub._relay_reader_event(_reader_pending())
+
+        assert await hub._mutes() == []
+        assert q.get_nowait().type == "connection_blocked"
+        assert OTHER_SHORT_ID in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_runtime_unmute_overrides_the_seed(self) -> None:
+        """The launch default is where the hub starts, not a lock."""
+        hub, q = _listening_hub(muted=[CONTAINER_SHORT_ID])
+
+        await hub._set_mute(CONTAINER_SHORT_ID, False)
+        await hub._relay_reader_event(_reader_pending())
+
+        assert q.get_nowait().type == "connection_blocked"

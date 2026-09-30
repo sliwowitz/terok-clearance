@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Jiri Vyskocil
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed varlink errors the hub can raise from ``Verdict``.
+"""Typed varlink errors the hub can raise from ``Verdict`` and ``SetMute``.
 
 Subclasses of `asyncvarlink.TypedVarlinkErrorReply` — the hub
-raises one of these on the four refusal paths, and clients pattern-
-match on the subclass instead of stringly-matching a message.  All
-four share the ``org.terok.Clearance1`` interface namespace.
+raises one of these on a refusal path (four for ``Verdict``, one for
+``SetMute``), and clients pattern-match on the error name instead of
+stringly-matching a message.  All of them share the
+``org.terok.Clearance1`` interface namespace.
 """
 
 from asyncvarlink import TypedVarlinkErrorReply
@@ -61,11 +62,13 @@ class InvalidAction(TypedVarlinkErrorReply, interface=CLEARANCE_INTERFACE_NAME, 
 class ShieldCliFailed(TypedVarlinkErrorReply, interface=CLEARANCE_INTERFACE_NAME, paramprefix=""):
     """``terok-shield allow|deny`` exited non-zero or timed out.
 
-    Clients render this as the red "Allow failed" / "Deny failed"
-    popup variant: the user's click reached the hub but the firewall
-    didn't accept it, so the notification's premise ("you decided X")
-    is misleading.  ``stderr`` is whatever ``terok-shield`` wrote,
-    truncated to a reasonable length by the hub.
+    The operator's click reached the hub, but the firewall did not accept
+    it, so the notification's premise ("you decided X") would be wrong.
+    This error goes back to the ``Verdict`` caller only.  The red "Allow
+    failed" / "Deny failed" popups are drawn from the ``verdict_applied``
+    event the hub fans out to every subscriber.  That event carries the
+    same text, sanitised, as its ``reason``.  ``stderr`` is whatever
+    ``terok-shield`` wrote, capped at 512 bytes by the verdict helper.
     """
 
     class Parameters:
@@ -73,3 +76,21 @@ class ShieldCliFailed(TypedVarlinkErrorReply, interface=CLEARANCE_INTERFACE_NAME
 
         action: str
         stderr: str
+
+
+class UnknownContainer(TypedVarlinkErrorReply, interface=CLEARANCE_INTERFACE_NAME, paramprefix=""):
+    """``SetMute`` named a container this hub does not serve.
+
+    A per-container hub knows its container by one canonical key — the
+    12-char short id every event carries — plus the aliases its launcher
+    registered (the full id, the podman name).  Any other key could never
+    match an event, so accepting it would report a mute while every prompt
+    kept coming.  ``expected`` is the canonical key the caller should have
+    used.
+    """
+
+    class Parameters:
+        """Typed payload for the varlink error reply."""
+
+        container: str
+        expected: str

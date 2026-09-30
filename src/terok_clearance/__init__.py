@@ -60,6 +60,8 @@ _LAZY = {
     "EventSubscriber": "terok_clearance.client.subscriber",
     "MultiSocketSubscriber": "terok_clearance.client.subscriber",
     "ClearanceClient": "terok_clearance.client.client",
+    "set_container_mute": "terok_clearance.client.client",
+    "container_mutes": "terok_clearance.client.client",
     "ClearanceEvent": "terok_clearance.domain.events",
     "ClearanceHub": "terok_clearance.hub.server",
     "VerdictClient": "terok_clearance.verdict.client",
@@ -76,6 +78,8 @@ __all__ = [
     "COMMANDS",
     "CallbackNotifier",
     "ClearanceClient",
+    "set_container_mute",
+    "container_mutes",
     "ClearanceEvent",
     "ClearanceHub",
     "EventSubscriber",
@@ -109,7 +113,11 @@ def __dir__() -> list[str]:
 
 
 if TYPE_CHECKING:  # keep IDEs and mypy seeing the full public surface
-    from terok_clearance.client.client import ClearanceClient
+    from terok_clearance.client.client import (
+        ClearanceClient,
+        container_mutes,
+        set_container_mute,
+    )
     from terok_clearance.client.subscriber import (
         ALL_NOTIFY_CATEGORIES,
         NOTIFY_BLOCKED,
