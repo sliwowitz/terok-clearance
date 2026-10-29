@@ -11,10 +11,13 @@ from terok_clearance.domain.events import ClearanceEvent
 from terok_clearance.wire.errors import (
     InvalidAction,
     ShieldCliFailed,
+    UnknownContainer,
     UnknownRequest,
     VerdictTupleMismatch,
 )
 from terok_clearance.wire.interface import CLEARANCE_INTERFACE_NAME, Clearance1Interface
+
+from .conftest import CONTAINER_NAME, CONTAINER_SHORT_ID
 
 
 class TestClearanceEvent:
@@ -99,6 +102,11 @@ class TestTypedErrors:
                 {"action": "allow", "stderr": "nft lock"},
                 f"{CLEARANCE_INTERFACE_NAME}.ShieldCliFailed",
             ),
+            (
+                UnknownContainer,
+                {"container": CONTAINER_NAME, "expected": CONTAINER_SHORT_ID},
+                f"{CLEARANCE_INTERFACE_NAME}.UnknownContainer",
+            ),
         ],
     )
     def test_error_name_and_parameters(self, cls: type, kwargs: dict, expected_name: str) -> None:
@@ -113,13 +121,25 @@ class TestTypedErrors:
 
 
 class TestInterfaceShape:
-    """Ensure the interface class keeps the two methods varlinkctl expects."""
+    """Ensure the interface class keeps the methods varlinkctl expects."""
 
     def test_interface_name(self) -> None:
         """The class attaches the well-known ``org.terok.Clearance1`` name."""
         assert Clearance1Interface.name == CLEARANCE_INTERFACE_NAME
 
     def test_interface_has_subscribe_and_verdict(self) -> None:
-        """Both RPC methods survive the decorator pass as callables."""
+        """Every RPC method survives the decorator pass as a callable."""
         assert callable(Clearance1Interface.Subscribe)
         assert callable(Clearance1Interface.Verdict)
+        assert callable(Clearance1Interface.SetMute)
+        assert callable(Clearance1Interface.Mutes)
+
+    def test_set_mute_renders_in_the_idl(self) -> None:
+        """``varlinkctl`` introspection shows the mute method with its real types."""
+        idl = Clearance1Interface.render_interface_description(comments=False)
+        assert "method SetMute(container: string, muted: bool) -> (muted: bool)" in idl
+
+    def test_mutes_renders_as_a_string_list(self) -> None:
+        """The read-back is a plain list of container keys, not a foreign object."""
+        idl = Clearance1Interface.render_interface_description(comments=False)
+        assert "method Mutes() -> (containers: []string)" in idl

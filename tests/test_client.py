@@ -20,16 +20,33 @@ import asyncio
 import contextlib
 import json
 import socket
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from terok_clearance.client.client import ClearanceClient
+from terok_clearance.client.client import (
+    ClearanceClient,
+    container_mutes,
+    set_container_mute,
+)
+from terok_clearance.client.subscriber import EventSubscriber
 from terok_clearance.hub.server import ClearanceHub
+from terok_clearance.wire.errors import UnknownContainer
 
-from .conftest import CONTAINER, DEST_IP, DOMAIN
+from .conftest import (
+    CONTAINER,
+    CONTAINER_FULL_ID,
+    CONTAINER_NAME,
+    CONTAINER_SHORT_ID,
+    DEST_IP,
+    DOMAIN,
+    OTHER_SHORT_ID,
+    TIER_REFUSAL_ADVICE,
+    TIER_REFUSAL_STDERR,
+)
 
 # ── Fixtures ──────────────────────────────────────────────────────────
 
@@ -240,6 +257,56 @@ async def test_verdict_shield_failure_returns_false_and_fans_out_failure(
     assert verdict_events[0].ok is False
 
 
+async def _eventually(condition: Callable[[], bool], *, timeout_s: float = 2.0) -> None:
+    """Poll *condition* until it holds: a varlink round trip signals nothing on completion."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while not condition():
+        if loop.time() > deadline:
+            raise AssertionError(f"condition did not hold within {timeout_s}s")
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_a_tier_refusal_explains_itself_in_the_popup(hub: ClearanceHub) -> None:
+    """The security tier's "use an override" line reaches the operator, not just a log.
+
+    The whole path: the reader's prompt, the operator's Allow click, the
+    subscriber's ``Verdict`` (whose reply it never reads), shield's refusal,
+    and the hub's ``verdict_applied`` fan-out, which is what the failure
+    popup is drawn from.
+    """
+    hub._verdict_client.apply = AsyncMock(return_value=(False, TIER_REFUSAL_STDERR))
+    notifier = AsyncMock()
+    notifier.notify = AsyncMock(return_value=1)
+    subscriber = EventSubscriber(notifier, socket_path=hub._clearance_socket)
+    await subscriber.start()
+    try:
+        await _eventually(lambda: bool(hub._subscribers))
+        _emit_reader_event(
+            hub._reader_socket,
+            {
+                "type": "pending",
+                "container": CONTAINER,
+                "id": f"{CONTAINER}:1",
+                "dest": DEST_IP,
+                "port": 443,
+                "proto": 6,
+                "domain": DOMAIN,
+            },
+        )
+        await _eventually(lambda: notifier.on_action.await_count == 1)
+        click = notifier.on_action.await_args.args[1]
+        click("allow")
+        await _eventually(lambda: notifier.notify.await_count == 2)
+    finally:
+        await subscriber.stop()
+
+    title, body = notifier.notify.await_args.args[:2]
+    assert title == f"Allow failed: {DOMAIN}"
+    assert TIER_REFUSAL_ADVICE in body
+
+
 # ── Client lifecycle ──────────────────────────────────────────────────
 
 
@@ -397,3 +464,243 @@ async def test_start_rollback_on_partial_connect_failure(tmp_path: Path) -> None
     assert c._rpc_transport is None
     assert first_transport is not None
     first_transport.close.assert_called()
+
+
+# ── Mute: identity, read-back and failure semantics ───────────────────
+
+
+def _pending(request_id: str, container: str = CONTAINER_SHORT_ID) -> dict:
+    """A reader ``pending`` line keyed the way the shield reader keys it: by short id."""
+    return {
+        "type": "pending",
+        "container": container,
+        "id": request_id,
+        "dest": DEST_IP,
+        "port": 443,
+        "proto": 6,
+        "domain": DOMAIN,
+    }
+
+
+def _blocked_ids(received: list) -> list[str]:
+    """The request ids of every prompt a subscriber was shown."""
+    return [e.request_id for e in received if e.type == "connection_blocked"]
+
+
+@pytest.fixture
+async def container_hub(private_runtime_dir: Path) -> AsyncIterator[ClearanceHub]:
+    """A started hub built for one container, as the supervisor builds it, seeded muted."""
+    h = ClearanceHub(
+        clearance_socket=private_runtime_dir / "clearance.sock",
+        reader_socket=private_runtime_dir / "reader.sock",
+        container=CONTAINER_SHORT_ID,
+        aliases=(CONTAINER_FULL_ID, CONTAINER_NAME),
+        muted=[CONTAINER_SHORT_ID],
+    )
+    h._verdict_client.apply = _stub_shield_ok
+    await h.start()
+    try:
+        yield h
+    finally:
+        with contextlib.suppress(Exception):
+            await h.stop()
+
+
+@pytest.mark.asyncio
+async def test_set_mute_stops_the_prompts_end_to_end(
+    hub: ClearanceHub, client: tuple[ClearanceClient, list]
+) -> None:
+    """A muted container's refusal never reaches the subscriber; unmuting restores it."""
+    c, received = client
+
+    assert await c.set_mute(CONTAINER_SHORT_ID, True) is True
+    _emit_reader_event(hub._reader_socket, _pending(f"{CONTAINER_SHORT_ID}:1"))
+    await asyncio.sleep(0.1)
+    assert _blocked_ids(received) == []
+
+    assert await c.set_mute(CONTAINER_SHORT_ID, False) is False
+    _emit_reader_event(hub._reader_socket, _pending(f"{CONTAINER_SHORT_ID}:2"))
+    await _eventually(lambda: bool(_blocked_ids(received)))
+    assert _blocked_ids(received) == [f"{CONTAINER_SHORT_ID}:2"]
+
+
+@pytest.mark.asyncio
+async def test_client_reads_the_mute_set_back(
+    hub: ClearanceHub, client: tuple[ClearanceClient, list]
+) -> None:
+    """``mutes()`` reports the hub's state in the keys events carry."""
+    c, _ = client
+
+    assert await c.mutes() == frozenset()
+    await c.set_mute(CONTAINER_SHORT_ID, True)
+
+    assert await c.mutes() == frozenset({CONTAINER_SHORT_ID})
+
+
+@pytest.mark.asyncio
+async def test_set_mute_without_a_connection_is_unknown(tmp_path: Path) -> None:
+    """With no connection the hub heard nothing, so the answer is "unknown", not a guess."""
+    c = ClearanceClient(socket_path=tmp_path / "absent.sock")
+
+    assert await c.set_mute(CONTAINER_SHORT_ID, True) is None
+    assert await c.mutes() is None
+
+
+@pytest.mark.asyncio
+async def test_set_mute_refused_by_the_hub_is_unknown(tmp_path: Path) -> None:
+    """A refused mute must not be reported as applied — the prompts are still coming."""
+    from asyncvarlink import GenericVarlinkErrorReply
+
+    c = ClearanceClient(socket_path=tmp_path / "absent.sock")
+    c._rpc_proxy = SimpleNamespace(
+        SetMute=AsyncMock(
+            side_effect=GenericVarlinkErrorReply(
+                UnknownContainer.name, {"container": OTHER_SHORT_ID, "expected": CONTAINER_SHORT_ID}
+            )
+        )
+    )
+
+    assert await c.set_mute(CONTAINER_SHORT_ID, True) is None
+
+
+@pytest.mark.asyncio
+async def test_set_mute_on_a_dropped_connection_is_unknown(tmp_path: Path) -> None:
+    """A hub that went away mid-call leaves the state unknown, not unchanged."""
+    c = ClearanceClient(socket_path=tmp_path / "absent.sock")
+    c._rpc_proxy = SimpleNamespace(SetMute=AsyncMock(side_effect=ConnectionResetError()))
+
+    assert await c.set_mute(CONTAINER_SHORT_ID, True) is None
+
+
+@pytest.mark.asyncio
+async def test_mutes_from_a_hub_that_predates_it_is_unknown(tmp_path: Path) -> None:
+    """An old supervisor answers MethodNotFound; that is "unknown", never "not muted"."""
+    from asyncvarlink import GenericVarlinkErrorReply
+    from asyncvarlink.serviceinterface import MethodNotFound
+
+    c = ClearanceClient(socket_path=tmp_path / "absent.sock")
+    c._rpc_proxy = SimpleNamespace(
+        Mutes=AsyncMock(
+            side_effect=GenericVarlinkErrorReply(MethodNotFound.name, {"method": "Mutes"})
+        )
+    )
+
+    assert await c.mutes() is None
+
+
+@pytest.mark.asyncio
+async def test_one_shots_need_no_subscription(hub: ClearanceHub) -> None:
+    """Mute and read-back each run over their own connection, with no event stream open."""
+    sock = hub._clearance_socket
+
+    assert await set_container_mute(sock, CONTAINER_SHORT_ID, True) is True
+    assert await container_mutes(sock) == frozenset({CONTAINER_SHORT_ID})
+    assert await set_container_mute(sock, CONTAINER_SHORT_ID, False) is False
+    assert await container_mutes(sock) == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_one_shots_raise_when_the_hub_is_unreachable(private_runtime_dir: Path) -> None:
+    """A one-shot caller has nothing else to show, so an absent hub is an error."""
+    absent = private_runtime_dir / "absent.sock"
+
+    with pytest.raises(OSError):
+        await set_container_mute(absent, CONTAINER_SHORT_ID, True)
+    with pytest.raises(OSError):
+        await container_mutes(absent)
+
+
+@pytest.mark.asyncio
+async def test_launch_default_mutes_from_the_first_event(
+    container_hub: ClearanceHub,
+) -> None:
+    """A hub seeded muted drops the first refusal, and says so when asked."""
+    received: list = []
+
+    async def on_event(event) -> None:  # noqa: ANN001
+        received.append(event)
+
+    c = ClearanceClient(socket_path=container_hub._clearance_socket)
+    await c.start(on_event)
+    try:
+        await _eventually(lambda: bool(container_hub._subscribers))
+        _emit_reader_event(container_hub._reader_socket, _pending(f"{CONTAINER_SHORT_ID}:1"))
+        await asyncio.sleep(0.1)  # absence cannot be polled for: give a leak time to surface
+
+        assert _blocked_ids(received) == []
+        assert await container_mutes(container_hub._clearance_socket) == frozenset(
+            {CONTAINER_SHORT_ID}
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            await c.stop()
+
+
+@pytest.mark.asyncio
+async def test_one_shot_mute_by_alias_lands_on_the_short_id(
+    container_hub: ClearanceHub,
+) -> None:
+    """The podman name is a registered alias: it unmutes the short id, the key events carry."""
+    sock = container_hub._clearance_socket
+
+    assert await set_container_mute(sock, CONTAINER_NAME, False) is False
+
+    assert await container_mutes(sock) == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_one_shot_mute_of_a_foreign_container_raises(
+    container_hub: ClearanceHub,
+) -> None:
+    """A key this hub cannot match comes back as UnknownContainer, not as a quiet success."""
+    from asyncvarlink import VarlinkErrorReply
+
+    sock = container_hub._clearance_socket
+
+    with pytest.raises(VarlinkErrorReply) as excinfo:
+        await set_container_mute(sock, OTHER_SHORT_ID, True)
+
+    assert excinfo.value.name == UnknownContainer.name
+    assert await container_mutes(sock) == frozenset({CONTAINER_SHORT_ID})
+
+
+@pytest.mark.asyncio
+async def test_host_side_events_reach_subscribers_under_the_short_id(
+    container_hub: ClearanceHub,
+) -> None:
+    """A shield drop sent under the podman name arrives keyed like every reader event."""
+    received: list = []
+
+    async def on_event(event) -> None:  # noqa: ANN001
+        received.append(event)
+
+    c = ClearanceClient(socket_path=container_hub._clearance_socket)
+    await c.start(on_event)
+    try:
+        await _eventually(lambda: bool(container_hub._subscribers))
+        _emit_reader_event(
+            container_hub._reader_socket, {"type": "shield_down", "container": CONTAINER_NAME}
+        )
+        await _eventually(lambda: bool(received))
+        await asyncio.sleep(0.1)  # absence cannot be polled for: give a duplicate time to land
+
+        assert [(e.type, e.container) for e in received] == [("shield_down", CONTAINER_SHORT_ID)]
+    finally:
+        with contextlib.suppress(Exception):
+            await c.stop()
+
+
+@pytest.mark.asyncio
+async def test_event_subscriber_hands_mute_calls_to_its_client() -> None:
+    """``EventSubscriber`` owns one hub connection, so both mute calls go straight through it."""
+    from terok_clearance import EventSubscriber
+
+    client = SimpleNamespace(
+        set_mute=AsyncMock(return_value=True),
+        mutes=AsyncMock(return_value=frozenset({CONTAINER_SHORT_ID})),
+    )
+    subscriber = EventSubscriber(MagicMock(), client=client)  # type: ignore[arg-type]
+
+    assert await subscriber.set_mute(CONTAINER_SHORT_ID, True) is True
+    assert await subscriber.mutes() == frozenset({CONTAINER_SHORT_ID})
+    client.set_mute.assert_awaited_once_with(CONTAINER_SHORT_ID, True)

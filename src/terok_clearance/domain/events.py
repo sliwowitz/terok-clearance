@@ -77,11 +77,21 @@ class ClearanceEvent:
     ``type`` + ``container`` are always populated; the remaining fields
     are filled in per-kind and default to zero-values otherwise.
 
+    ``container`` is the hub's key for the container — what ``SetMute``
+    and ``Verdict`` take and ``Mutes()`` returns: under the terok
+    supervisor, the 12-char short container id the shield reader stamps
+    on everything it emits.  It is never the podman name and never a task
+    name — those live in ``dossier`` for display, and addressing a mute by
+    them silences nothing.
+
     Known values of ``type`` (additional fields beyond ``container``):
 
     * ``connection_blocked`` — ``request_id``, ``dest``, ``port``,
       ``proto``, ``domain``, ``dossier``.  Requires an operator verdict.
-    * ``verdict_applied`` — ``request_id``, ``action``, ``ok``.
+    * ``verdict_applied`` — ``request_id``, ``action``, ``ok``; when ``ok``
+      is false, ``reason`` carries what ``terok-shield`` said (sanitised),
+      such as the security tier's "break-glass only" line naming the
+      override.
     * ``container_started`` — ``dossier``.
     * ``container_exited`` — ``reason``, ``dossier``.
     * ``shield_up`` / ``shield_down`` / ``shield_disengaged`` — ``dossier``.

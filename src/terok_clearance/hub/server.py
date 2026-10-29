@@ -25,7 +25,7 @@ import contextlib
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import AbstractContextManager
 from pathlib import Path
 
@@ -38,6 +38,7 @@ from terok_clearance.verdict.client import VerdictClient
 from terok_clearance.wire.errors import (
     InvalidAction,
     ShieldCliFailed,
+    UnknownContainer,
     UnknownRequest,
     VerdictTupleMismatch,
 )
@@ -70,6 +71,21 @@ _VERDICT_CLEANUP_INTERVAL = 300.0  # 5 minutes
 
 _TTL_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([smhd])?$", re.IGNORECASE)
 _TTL_UNITS = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0, None: 1.0}
+
+#: The only key a per-container hub accepts for its container: the 12-char
+#: short id the shield reader stamps on every event.  The reader takes the
+#: first 12 characters of the podman id and accepts only hex, so this is the
+#: same grammar.  A podman name or the full 64-char id would re-key every
+#: event to a value no short-id caller uses, so a mute would silently
+#: do nothing.
+_SHORT_ID_RE = re.compile(r"[0-9a-fA-F]{12}")
+
+#: Length cap for the shield output carried as a failed verdict's ``reason``.
+#: It is the same 512 the verdict helper already caps that output at.
+#: Shield puts the next step at the end of its refusal line ("use a
+#: shield.override ..."), and the default wire cap of 256 would cut that
+#: end off a long host name.
+_VERDICT_REASON_MAX_LEN = 512
 
 
 def parse_verdict_ttl(value: str | None) -> float | None:
@@ -159,7 +175,7 @@ VerdictTtlParam = float | None | _Unset
 class ClearanceHub:
     """Server for the ``org.terok.Clearance1`` interface.
 
-    Owns three pieces of state:
+    Owns four pieces of state:
 
     * ``_subscribers`` — a set of bounded per-connection queues; the hub
       puts a [`ClearanceEvent`][terok_clearance.ClearanceEvent] on each one every time the reader
@@ -167,7 +183,15 @@ class ClearanceHub:
       dropped; fast clients aren't affected.
     * ``_live_verdicts`` — the ``request_id → (container, dest)`` map
       the ``Verdict`` method checks for the authz binding.
+    * ``_muted`` — the containers whose prompts are dropped, seeded from
+      the launch default and changed by ``SetMute``.
     * An [`EventIngester`][terok_clearance.hub.ingester.EventIngester] bound to the canonical reader socket.
+
+    Wherever the hub keys a container — bindings, mutes, the events it
+    fans out — it uses the key the events carry: the 12-char short id the
+    shield reader stamps on what it emits.  A hub built for one container
+    makes that the only key it holds (see the *container* argument), so a
+    name can never be mistaken for it.
 
     Lifecycle: [`start`][terok_clearance.hub.server.ClearanceHub.start] brings everything up; [`stop`][terok_clearance.hub.server.ClearanceHub.stop] tears
     it down under individual timeouts so a flaky bus or a stuck
@@ -182,8 +206,11 @@ class ClearanceHub:
         verdict_client: VerdictClient | None = None,
         socket_context: Callable[[], AbstractContextManager[None]] | None = None,
         verdict_ttl: VerdictTtlParam = _UNSET,
+        container: str | None = None,
+        aliases: Iterable[str] = (),
+        muted: Iterable[str] = (),
     ) -> None:
-        """Configure the two sockets and the verdict-helper client.
+        """Configure the two sockets, the verdict-helper client and the mute state.
 
         ``verdict_client`` is injected so tests can stub out shield exec
         without spawning the helper process.  Production callers leave
@@ -210,6 +237,45 @@ class ClearanceHub:
 
             clearance:
               verdict_ttl: 24h   # or "never" to disable
+
+        *container* — the one container this hub serves, under the key the
+        shield reader stamps on its events: the 12-char short id.  Pass it
+        only when *reader_socket* is per-container, as in the supervisor's
+        ``events/<short_id>/ingester.sock`` layout: every event arriving
+        there is about this container by construction, so the hub stamps
+        each one with this key.  That matters because producers disagree —
+        the reader sends the short id while host-side ``shield_up`` /
+        ``shield_down`` events arrive under the podman name — and a split
+        identity lets a shield drop miss the very prompts it should retire.
+        It also confines every verdict this hub can issue to its own
+        container.  ``None`` (the default) keeps a multi-container hub that
+        relays each event's key as sent.  Anything but 12 hex characters
+        raises ``ValueError``.  A podman name or the full id would be
+        accepted and then become the key on every event, which no
+        short-id caller could address.  The launcher would see nothing
+        wrong while every mute did nothing.
+
+        *aliases* — other spellings of *container* that a ``SetMute``
+        caller or the launch default may use: the full id, the podman name.
+        They resolve to *container*; with *container* set, any other key is
+        refused with [`UnknownContainer`][terok_clearance.wire.errors.UnknownContainer].
+        Meaningless without *container*, so passing them alone raises
+        ``ValueError``.
+
+        *muted* — containers whose prompts start muted: the launch default.
+        A launcher that passes it on every construction (the per-container
+        supervisor builds a fresh hub on each container start) gets a
+        default that holds across hub restarts, where a runtime ``SetMute``
+        deliberately does not.  It is applied here, before
+        [`start`][terok_clearance.hub.server.ClearanceHub.start] binds the
+        ingester, so no prompt can slip out ahead of it.  A key this hub
+        does not serve is logged and ignored: the container stays audible,
+        the safe direction for a default that cannot be honoured.
+
+        *aliases* and *muted* take collections of keys.  Passing a single
+        string raises ``TypeError``: a string is itself iterable, so it
+        would be split into one key per character and the intended key
+        would never be used.
         """
         self._clearance_socket = clearance_socket or default_clearance_socket_path()
         self._reader_socket = reader_socket  # None → EventIngester picks its default.
@@ -234,6 +300,36 @@ class ClearanceHub:
         # used by the background cleanup to expire stale entries.
         self._live_verdicts_ts: dict[str, float] = {}
         self._cleanup_task: asyncio.Task[None] | None = None
+
+        for parameter, keys in (("aliases", aliases), ("muted", muted)):
+            if isinstance(keys, str):
+                raise TypeError(
+                    f"{parameter} takes a collection of container keys, not the string {keys!r}"
+                )
+        if container is not None and not _SHORT_ID_RE.fullmatch(container):
+            raise ValueError(
+                "container must be the 12-hex-digit short id the shield reader stamps "
+                f"on its events, not {container!r}"
+            )
+        alias_keys = tuple(alias for alias in aliases if alias)
+        if container is None and alias_keys:
+            raise ValueError("aliases need the container they stand for")
+        self._container = container
+        # Every key a mute may arrive under → the key events carry.  Empty
+        # for a multi-container hub, which takes keys as given.
+        self._mute_keys: dict[str, str] = (
+            {}
+            if container is None
+            else dict.fromkeys(alias_keys, container) | {container: container}
+        )
+        # Containers whose refusals are not put to the operator.  The reader
+        # still writes them to the audit log while the task's shield audit is
+        # on; with audit off, a muted refusal leaves no record anywhere.
+        # Held in memory and rebuilt from the launch default on every start,
+        # so a runtime mute ends with the hub; ``Mutes()`` reads it back.
+        self._muted: set[str] = set()
+        for key in muted:
+            self._seed_mute(key)
 
         self._ingester: EventIngester | None = None
         self._varlink_server: VarlinkUnixServer | None = None
@@ -264,6 +360,8 @@ class ClearanceHub:
                 Clearance1Interface(
                     event_stream_factory=self._subscribe,
                     apply_verdict=self._apply_verdict,
+                    set_mute=self._set_mute,
+                    mutes=self._mutes,
                 )
             )
             registry.register_interface(
@@ -346,7 +444,9 @@ class ClearanceHub:
         releases it on ``verdict_applied`` / lifecycle changes, so the
         ``Verdict`` method can pass or refuse without re-consulting the
         reader.  Malformed events are logged and dropped — one bad line
-        from a rogue reader mustn't kill the ingester.
+        from a rogue reader mustn't kill the ingester.  A hub built for one
+        container stamps each event with that container's key first, so the
+        bindings, the mute set and every subscriber see a single identity.
         """
         raw_type = raw.get("type", "")
         # Only the ``pending → connection_blocked`` renaming differs;
@@ -359,6 +459,19 @@ class ClearanceHub:
             event = _translate_reader_event(wire_type, raw)
         except (KeyError, ValueError, TypeError) as exc:
             _log.warning("dropping malformed reader event %r: %s", raw, exc)
+            return
+        if self._container is not None and event.container != self._container:
+            # A per-container ingester only ever hears about its own container,
+            # whatever key the producer chose (host-side shield events use the
+            # podman name); one key is what lets mutes and purges match.
+            _log.debug("%s for %r stamped as %s", event.type, event.container, self._container)
+            event.container = self._container
+        if event.type == "connection_blocked" and event.container in self._muted:
+            # The shield already refused this connection and the reader already
+            # recorded it; muting drops the question, nothing else.  Dropped
+            # before the verdict binding too — a request nobody is shown must
+            # not sit in the map waiting for an answer that cannot come.
+            _log.debug("muted: dropping prompt for %s → %s", event.container, event.dest)
             return
         self._update_live_verdicts(event)
         self._fan_out(event)
@@ -388,6 +501,8 @@ class ClearanceHub:
             for rid in stale:
                 self._live_verdicts.pop(rid, None)
                 self._live_verdicts_ts.pop(rid, None)
+            if event.type == "container_exited":
+                self._muted.discard(event.container)
 
     def _cleanup_stale_verdicts(self) -> int:
         """Expire pending-verdict entries older than the configured TTL.
@@ -478,6 +593,15 @@ class ClearanceHub:
         emitted on the shared fan-out carries the same ``ok`` value so
         every subscriber (including the one that called us) sees the
         same outcome.
+
+        On failure the event also carries shield's stderr, sanitised, as
+        ``reason``.  The ``ShieldCliFailed`` raised here reaches only the
+        caller, and the popups are drawn from the event, not from the
+        caller's reply.  Without ``reason`` on the event, an operator
+        whose Allow was refused by the security tier would see "Allow
+        failed" with no explanation.  Shield's own refusal line says the
+        way through is an override, and ``reason`` is how that line
+        reaches the popup.
         """
         if action not in VERDICT_ACTIONS:
             raise InvalidAction(action=action)
@@ -510,7 +634,9 @@ class ClearanceHub:
             if ts is not None:
                 self._live_verdicts_ts[request_id] = ts
         # Republish the outcome on the event stream so every subscriber
-        # (not just this caller) can flip its notification state.
+        # (not just this caller) can flip its notification state — and,
+        # on failure, say why.  Everything on the event stream passes through
+        # the wire sanitiser, and shield's stderr gets the same treatment.
         self._fan_out(
             ClearanceEvent(
                 type="verdict_applied",
@@ -518,11 +644,77 @@ class ClearanceHub:
                 request_id=request_id,
                 action=action,
                 ok=ok,
+                reason="" if ok else sanitize(stderr_snippet, max_len=_VERDICT_REASON_MAX_LEN),
             )
         )
         if not ok:
             raise ShieldCliFailed(action=action, stderr=stderr_snippet)
         return True
+
+    # ── mute state ─────────────────────────────────────────────────────
+
+    def _mute_key(self, container: str) -> str:
+        """Return the key *container*'s prompts are muted under.
+
+        A multi-container hub takes the key as given.  A hub built for one
+        container maps its aliases onto the short id its events carry and
+        raises [`UnknownContainer`][terok_clearance.wire.errors.UnknownContainer]
+        for anything else — a mute filed under a key no event carries would
+        report success while every prompt kept coming.
+        """
+        if self._container is None:
+            return container
+        try:
+            return self._mute_keys[container]
+        except KeyError:
+            raise UnknownContainer(container=container, expected=self._container) from None
+
+    def _seed_mute(self, container: str) -> None:
+        """Apply one launch-default mute, or log why it cannot be honoured."""
+        try:
+            key = self._mute_key(container)
+        except UnknownContainer:
+            _log.warning(
+                "launch default names %s, which this hub (%s) does not serve; prompts stay on",
+                container,
+                self._container,
+            )
+            return
+        self._muted.add(key)
+        _log.info("clearance prompts muted for %s (launch default)", key)
+
+    async def _set_mute(self, container: str, muted: bool) -> bool:
+        """Start or stop dropping *container*'s prompts; returns the state in force.
+
+        Muting is not a verdict.  It never allows anything and never denies
+        anything: the refusal happened in the kernel before the hub saw the
+        event.  What changes is whether an operator is asked about it.  The
+        mute does not change whether the refusal is recorded either.  The
+        reader writes the audit line while the task's shield audit is
+        enabled, prompt or no prompt.  With audit off, a muted refusal
+        leaves no record at all.
+
+        Raises [`UnknownContainer`][terok_clearance.wire.errors.UnknownContainer]
+        when this hub serves one container and *container* is not one of its
+        keys, so a caller holding the wrong identifier finds out.
+        """
+        try:
+            key = self._mute_key(container)
+        except UnknownContainer:
+            _log.warning(
+                "SetMute refused: %s is not this hub's container (%s)", container, self._container
+            )
+            raise
+        if muted:
+            self._muted.add(key)
+        else:
+            self._muted.discard(key)
+        _log.info("clearance prompts %s for %s", "muted" if muted else "unmuted", key)
+        return key in self._muted
+
+    async def _mutes(self) -> list[str]:
+        """Return the muted containers, sorted so equal states give equal replies."""
+        return sorted(self._muted)
 
 
 # ── module-level helpers ───────────────────────────────────────────────
