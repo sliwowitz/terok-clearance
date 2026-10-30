@@ -128,7 +128,7 @@ def _read_verdict_ttl_from_config() -> float | None:
         if raw is None:
             return _DEFAULT_VERDICT_TTL
         return parse_verdict_ttl(raw)
-    except Exception:  # noqa: BLE001 — fail-silent; bad config must not crash the hub
+    except Exception:  # noqa: BLE001 - fail-silent; bad config must not crash the hub
         _log.warning(
             "failed to read clearance.verdict_ttl from config — using default", exc_info=True
         )
@@ -288,7 +288,7 @@ class ClearanceHub:
             ttl = None
         elif isinstance(verdict_ttl, (int, float)):
             ttl = float(verdict_ttl)
-        else:  # pragma: no cover — defensive; type narrowing should prevent this
+        else:  # pragma: no cover - defensive; type narrowing should prevent this
             ttl = _DEFAULT_VERDICT_TTL
         self._verdict_ttl: float | None = ttl
 
@@ -779,7 +779,7 @@ def _own_version() -> str:
         from importlib.metadata import version
 
         return version("terok-clearance")
-    except Exception:  # pragma: no cover — only hits if metadata is missing
+    except Exception:  # pragma: no cover - only hits if metadata is missing
         return "0.0.0"
 
 
@@ -793,7 +793,7 @@ def _default_reader_socket() -> Path:
 # ── stdout bootstrapper (called from _registry._handle_serve) ──────────
 
 
-async def serve() -> None:  # pragma: no cover — integration path
+async def serve() -> None:  # pragma: no cover - integration path
     """Run the hub service until SIGINT/SIGTERM.
 
     The entry point ``terok-clearance-hub serve`` hands off here.  Blocks forever

@@ -67,7 +67,7 @@ class Verdict1Interface(VarlinkInterface, name=VERDICT_INTERFACE_NAME):
             ok, stderr = await self._apply_verdict(container, dest, action)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 — contract: never leaks
+        except Exception as exc:  # noqa: BLE001 - contract: never leaks
             _log.exception("unexpected verdict helper failure")
             return VerdictReply(ok=False, stderr=f"internal verdict helper error: {exc}")
         return VerdictReply(ok=bool(ok), stderr=str(stderr))
