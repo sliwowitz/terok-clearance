@@ -77,6 +77,7 @@ make spdx NAME="Real Human Name" FILES="src/terok_clearance/foo.py"  # Add SPDX 
     ```
   - **Existing file** → adds an additional copyright line (preserves the original)
   When modifying an existing file, always run `make spdx` with the contributor's name. NAME must be a real person's name (ASCII-only), not a project name. Use a single year (year of first contribution), not a range. Files covered by `REUSE.toml` glob patterns (`.md`, `.yml`, `.toml`, `.json`, etc.) do not need inline headers.
+- **Machine-read comments are ASCII-only**: a comment that a tool parses — a suppression marker (`# noqa`, `# nosec`, `# type: ignore`, `# pragma: no cover`, `# NOSONAR`) or another directive (`# fmt: off`, `# pylint: disable`) — uses ASCII only, its reason included.  Write `# noqa: BLE001 - reason` with a plain hyphen.  Keep commas out of a `noqa` reason: SonarCloud reads a comma as the start of another rule code, so use a semicolon.  Ordinary comments may use any UTF-8, and docstrings are welcome to use proper typography.
 - **Documentation filenames**: Markdown files under `docs/` use `lowercase.md` naming (e.g. `developer.md`). Root-level project files (`README.md`, `AGENTS.md`) stay UPPERCASE per standard convention.
 - **Public API surface**: `__init__.py` + `__all__` is the contract. Symbols listed in `__all__` are stable across minor releases; anything underscore-prefixed or absent from `__all__` is internal and may change without notice. Review the list before each release — stable APIs stay small because growing them costs.
 

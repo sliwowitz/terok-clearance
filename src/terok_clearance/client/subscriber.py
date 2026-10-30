@@ -130,7 +130,7 @@ def _wallclock_hhmmss() -> str:
     """Return the current local time as ``HH:MM:SS`` for human-facing bodies."""
     from datetime import datetime
 
-    return datetime.now().strftime("%H:%M:%S")  # noqa: DTZ005 — display-only
+    return datetime.now().strftime("%H:%M:%S")  # noqa: DTZ005 - display-only
 
 
 def _identity_label(dossier: Dossier, fallback_id: str) -> str:

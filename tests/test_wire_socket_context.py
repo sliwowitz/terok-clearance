@@ -25,7 +25,7 @@ class _Probe:
     def __init__(self) -> None:
         self.events: list[str] = []
 
-    def context(self):  # noqa: ANN201 — test helper
+    def context(self):  # noqa: ANN201 - test helper
         probe = self
 
         @contextmanager

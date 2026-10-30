@@ -63,7 +63,7 @@ def ensure_private_parent(path: Path, label: str) -> None:
         )
 
 
-async def bind_hardened(  # noqa: ANN401 — returns whatever the factory gave us
+async def bind_hardened(  # noqa: ANN401 - returns whatever the factory gave us
     factory: Callable[[str], Any],
     path: Path,
     label: str,

@@ -262,7 +262,7 @@ class DbusNotifier:
                 try:
                     bus = await MessageBus(auth=AuthExternal(uid=_uid)).connect()
                     break
-                except Exception as exc:  # noqa: BLE001 — retry with next UID
+                except Exception as exc:  # noqa: BLE001 - retry with next UID
                     last_exc = exc
             if bus is None:
                 # candidate_uids is non-empty, so the loop ran and set last_exc.
@@ -474,11 +474,11 @@ class DbusNotifier:
         hints: Mapping[str, Any] | None = None,
         replaces_id: int = 0,
         app_icon: str = "",
-        container_id: str = "",  # noqa: ARG002 — protocol kwarg ignored by desktop
-        container_name: str = "",  # noqa: ARG002 — protocol kwarg ignored by desktop
-        project: str = "",  # noqa: ARG002 — protocol kwarg ignored by desktop
-        task_id: str = "",  # noqa: ARG002 — protocol kwarg ignored by desktop
-        task_name: str = "",  # noqa: ARG002 — protocol kwarg ignored by desktop
+        container_id: str = "",  # noqa: ARG002 - protocol kwarg ignored by desktop
+        container_name: str = "",  # noqa: ARG002 - protocol kwarg ignored by desktop
+        project: str = "",  # noqa: ARG002 - protocol kwarg ignored by desktop
+        task_id: str = "",  # noqa: ARG002 - protocol kwarg ignored by desktop
+        task_name: str = "",  # noqa: ARG002 - protocol kwarg ignored by desktop
     ) -> int:
         """Send a desktop notification.
 

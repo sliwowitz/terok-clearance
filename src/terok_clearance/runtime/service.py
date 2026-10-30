@@ -38,7 +38,7 @@ def configure_logging(level: int = logging.INFO) -> None:
     configure(identifier="terok-clearance-hub", level=level, stderr=True)
 
 
-async def wait_for_shutdown_signal() -> None:  # pragma: no cover — real signals
+async def wait_for_shutdown_signal() -> None:  # pragma: no cover - real signals
     """Block the current task until ``SIGINT`` or ``SIGTERM`` arrives."""
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

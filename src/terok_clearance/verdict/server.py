@@ -211,5 +211,5 @@ def _own_version() -> str:
         from importlib.metadata import version
 
         return version("terok-clearance")
-    except Exception:  # pragma: no cover — only hits if metadata is missing
+    except Exception:  # pragma: no cover - only hits if metadata is missing
         return "0.0.0"

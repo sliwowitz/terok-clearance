@@ -320,7 +320,7 @@ class ClearanceClient:
                         _log.exception("event callback raised for %r", event)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 — any drop falls through to reconnect
+            except Exception as exc:  # noqa: BLE001 - any drop falls through to reconnect
                 # ``_stopping`` is flipped by ``stop()`` from another task, so
                 # the check below isn't unreachable as mypy thinks.
                 if self._stopping:
@@ -347,5 +347,5 @@ class ClearanceClient:
                 backoff = 1.0
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 — retry any connect failure
+            except Exception as exc:  # noqa: BLE001 - retry any connect failure
                 _log.info("hub reconnect failed (%s); retrying", exc)
